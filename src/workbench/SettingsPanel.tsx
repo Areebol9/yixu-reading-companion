@@ -1,0 +1,33 @@
+import { workbenchErrorLabel } from './copy.ts';
+import { useState } from 'react';
+import { Drawer } from './components.tsx';
+import { Icon } from './icons.tsx';
+import type { WorkbenchService } from './contract.ts';
+
+export type SettingsDraft = { mode: 'offline' | 'live'; endpoint: string; model: string; effort: 'medium' | 'high'; apiKey: string; tokenLimit: number; maxOutput: number; contextLimit: number; pageChars: number };
+export function SettingsPanel({ initial, secretPresent, services, onRefreshServices, onUseService, onSave, onClose }: { initial: SettingsDraft; secretPresent: boolean; services: WorkbenchService[]; onRefreshServices: () => Promise<void>; onUseService: (id: string) => Promise<SettingsDraft>; onSave: (draft: SettingsDraft) => Promise<void>; onClose: () => void }) {
+  const [draft, setDraft] = useState(initial), [showKey, setShowKey] = useState(false), [saving, setSaving] = useState(false), [error, setError] = useState('');
+  const available = services.filter(service => service.scope === 'workbench' || !services.some(other => other.id === service.id && other.scope === 'workbench'));
+  const selectedService = available.find(service => service.baseUrl === draft.endpoint && service.model === draft.model);
+  const keyPresent = selectedService?.hasKey ?? (draft.endpoint === initial.endpoint && draft.model === initial.model && secretPresent);
+  const patch = <K extends keyof SettingsDraft>(key: K, value: SettingsDraft[K]) => setDraft(previous => ({ ...previous, [key]: value }));
+  async function save() {
+    setError('');
+    if (![draft.tokenLimit, draft.maxOutput, draft.contextLimit, draft.pageChars].every(value => Number.isSafeInteger(value) && value > 0)) { setError('请为用量与处理参数填写正整数。'); return; }
+    if (draft.mode === 'live' && (!draft.endpoint.trim() || !draft.model.trim())) { setError('请先选择已有渠道，或填写接口地址和实际模型。'); return; }
+    setSaving(true);
+    try { await onSave(draft); onClose(); } catch (error) { setError(error instanceof Error ? error.message : '设置保存未完成，请重试。'); } finally { setSaving(false); }
+  }
+  return <Drawer title="模型设置" subtitle="选择模型服务，设置阅读方式和用量上限" onClose={onClose} footer={<><small>保存设置不会请求模型。<br />使用模型时才产生用量。</small><button className="btn btn-primary" onClick={() => void save()} disabled={saving}><Icon name="check" size={15} />{saving ? '保存中…' : '保存设置'}</button></>}>
+    <section className="form-section"><h3>阅读方式</h3><div className="choice-row"><button className={`choice${draft.mode === 'offline' ? ' selected' : ''}`} aria-pressed={draft.mode === 'offline'} onClick={() => patch('mode', 'offline')}><strong><Icon name="leaf" size={16} />演示模式</strong><small>使用固定回复体验操作。<br />不连接模型服务。</small></button><button className={`choice${draft.mode === 'live' ? ' selected' : ''}`} aria-pressed={draft.mode === 'live'} onClick={() => patch('mode', 'live')}><strong><Icon name="spark" size={16} />AI共读</strong><small>使用你选择的模型服务。<br />跟读和提问会产生用量。</small></button></div><p>切换阅读方式建立独立存档，原存档可从阅读存档打开；书籍原文和浏览位置会带入，伙伴理解按新存档实际准备。</p></section>
+    <section className="form-section"><h3>数据与隐私</h3><div className="callout">书籍、聊天、伙伴理解和体验备注保存在这个浏览器。AI共读通过本机服务，将获准正文和本题需要的理解、交流发送至所选模型服务，费用按该渠道结算。</div><p>此客户端支持章节阅读、交流、段评与点赞、安静模式、暂停继续和本机备份。语音、联网搜索与手机外部页面跟随尚未在此入口提供。</p><p>密钥由本机服务保存，网页取得配置状态。此入口的共读备份包含原文与理解，目前不导出密钥。</p></section>
+    <section className="form-section"><div className="side-heading"><h3 style={{ marginBottom: 0 }}>选择模型服务</h3><button className="text-action" onClick={() => { setError(''); void onRefreshServices().catch(error => setError(error instanceof Error ? error.message : '渠道读取失败，请确认本机服务正在运行。')); }}>刷新服务列表<Icon name="history" size={12} /></button></div>
+      <label className="form-field"><span>可用模型服务</span><select defaultValue="" disabled={saving} onChange={event => { const id = event.target.value; if (!id) return; setSaving(true); setError(''); void onUseService(id).then(config => setDraft(previous => ({ ...config, mode: previous.mode }))).catch(error => setError(error instanceof Error ? error.message : '渠道选择未完成。')).finally(() => setSaving(false)); }}><option value="">请选择模型服务</option>{available.map(service => <option key={`${service.scope}:${service.id}`} value={service.id}>{service.name || service.model} · {service.model} / {service.effort ?? 'high'} · {service.hasKey ? '已配置' : '需要配置'}</option>)}</select></label>
+      <p>所选配置用于这份阅读存档。保存本身不调用模型；开始伴读、提问或请伙伴回应段评时才使用该服务。</p>
+      <details className="custom-service"><summary>高级服务设置</summary><label className="form-field"><span>兼容 OpenAI 的接口地址</span><input type="url" value={draft.endpoint} onChange={event => patch('endpoint', event.target.value)} placeholder="https://…/v1" autoComplete="off" /></label><label className="form-field"><span>模型名称</span><input value={draft.model} onChange={event => patch('model', event.target.value)} placeholder="服务商提供的模型名称" autoComplete="off" /></label><label className="form-field"><span>思考强度</span><select value={draft.effort} onChange={event => patch('effort', event.target.value as 'medium' | 'high')}><option value="high">High</option><option value="medium">Medium</option></select></label><label className="form-field"><span>API 密钥 {keyPresent && '· 本机已配置'}</span><input type={showKey ? 'text' : 'password'} value={draft.apiKey} onChange={event => patch('apiKey', event.target.value)} placeholder={keyPresent ? '留空沿用所选渠道的本机认证' : '自定义远程接口按需填写'} autoComplete="new-password" /></label><label className="check-choice"><input type="checkbox" checked={showKey} onChange={event => setShowKey(event.target.checked)} />显示本次输入的密钥</label></details>
+      <div className="selected-model"><span>已选模型</span><strong>{draft.model || '尚未选择'} / {draft.effort}</strong><small>{draft.endpoint || '尚未选择服务'}</small></div>
+    </section>
+    <section className="form-section"><h3>用量上限</h3><label className="form-field"><span>当前存档用量上限（token）</span><input type="number" min={1} step={10000} value={draft.tokenLimit} onChange={event => patch('tokenLimit', Number(event.target.value))} /></label><p>当前存档中的历史用量和未结算请求继续累计。请根据服务商额度设置本地用量上限。</p><details className="custom-service"><summary>高级用量设置</summary><p>正文按章节连续排版；跟随阅读只接上屏幕中实际可见的文字。</p><div className="form-grid"><label className="form-field"><span>单次模型输出上限（token）</span><input type="number" min={1} step={1024} value={draft.maxOutput} onChange={event => patch('maxOutput', Number(event.target.value))} /></label><label className="form-field"><span>模型上下文上限（token）</span><input type="number" min={1} step={1024} value={draft.contextLimit} onChange={event => patch('contextLimit', Number(event.target.value))} /></label></div></details></section>
+    {error && <div className="callout amber" role="alert">{workbenchErrorLabel(error)}</div>}
+  </Drawer>;
+}

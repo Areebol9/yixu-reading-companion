@@ -1,0 +1,17 @@
+{
+  "engine": "sherpa-onnx 1.13.8",
+  "license": "Apache-2.0",
+  "aar": {
+    "file": "sherpa-onnx-static-link-onnxruntime-1.13.8.aar",
+    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/sherpa-onnx-static-link-onnxruntime-1.13.8.aar",
+    "sha256": "b22c3fc1b6a45666d28892bb2f7694beeb77a8362d7ebd77c1a5431ec9435471"
+  },
+  "model": "csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23",
+  "revision": "204ad334e2e683fd295359930cc16fc0432a23ac",
+  "files": [
+    {"name":"encoder-epoch-99-avg-1.int8.onnx","sha256":"1c556ea57cec304e55ec4b72e52c1cc098bb01476ed7d90f3de939fe126487b1"},
+    {"name":"decoder-epoch-99-avg-1.onnx","sha256":"5ee0f03a2768ff1d5c83ef3a493243c7935d316cd41280037b14783a3467cc78"},
+    {"name":"joiner-epoch-99-avg-1.int8.onnx","sha256":"a7cf9d82757bdcf786059454495a9ca95e4bd7347f72473fc08d794475c36169"},
+    {"name":"tokens.txt","sha256":"8b294db9045d6e5f94647f4c1eec1af4da143a75053c399611444b378ff966ac"}
+  ]
+}

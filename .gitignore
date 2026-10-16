@@ -1,0 +1,25 @@
+# Dependencies and build output
+node_modules/
+dist/
+artifacts/
+
+# Local settings, reading data, credentials and caches
+.local/
+.env
+.env.*
+!.env.example
+*.log
+*.keystore
+*.jks
+
+# Android machine configuration and generated files
+android/.gradle/
+android/local.properties
+android/**/build/
+android/**/.cxx/
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
