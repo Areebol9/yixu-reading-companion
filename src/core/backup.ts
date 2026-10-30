@@ -23,7 +23,7 @@ import {hashText} from './text-hash.ts';
 import {hydrateMemoryBodies,requireMemoryText,validateMemoryBody} from './memory-bodies.ts';
 import {prepareMemoryIdentities,memoryContentIdentity,stampsEqual} from './memory-identity.ts';
 import {prepareMemoryRecovery} from './memory-recovery.ts';
-import { applyFrontMatterBoundary, covers, importBook,mergeRanges,subtractRanges } from './books.ts';
+import { applyFrontMatterBoundary, covers, importBook,bookSourceFile,mergeRanges,subtractRanges } from './books.ts';
 import { forgetMemory,isBackgroundMemory, reconcileCorrections,reconcileMemoryOrigins } from './context.ts';
 import { validateService } from './services.ts';
 import { publicWebUrl } from './web.ts';
@@ -251,6 +251,10 @@ export async function restoreBackupState(value:unknown,current:State,store?:Stor
     if(book.arcCandidate!==undefined&&book.arcCandidate!=='v1')throw Error('弧线候选能力无效');
     if(book.narrativeMode!==undefined&&!['legacy','stages'].includes(book.narrativeMode))throw Error('共读叙事资料方式无效');
     if (book.readingSourceId !== undefined && (typeof book.readingSourceId !== 'string' || !/^[a-z0-9:._-]{1,80}$/i.test(book.readingSourceId))) throw new Error('阅读应用标识无效');
+    const importedSource=bookSourceFile(book.sourceFile);
+    // A backup may be opened on another computer. Retain the file name while
+    // letting a fresh local import establish a usable external path.
+    book.sourceFile=importedSource?{name:importedSource.name}:undefined;
     const checked = await importBook(book.title, book.text);
     if (checked.version !== book.version) throw new Error('书籍正文与备份版本不一致');
     await validateBookSourceLineage(book);

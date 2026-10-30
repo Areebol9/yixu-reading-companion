@@ -2,6 +2,7 @@ import {workbenchCommands} from './contract.ts';
 import type {WorkbenchClient, WorkbenchSnapshot, WorkbenchClientOperation} from './contract.ts';
 import type {HostFrame,HostDelta,HostRequest,CommandReceipt,CommandStatus} from '../host/contract.ts';
 import {applyProjection} from '../host/projection-delta.ts';
+import {sourceFileFromSelection} from './desktop-window.ts';
 
 export type CompanionConnection = {schema: 'yixu-companion-connection-v1'; archiveId: string; epoch: string; url: string; token: string};
 
@@ -143,12 +144,14 @@ export async function createRemoteWorkbenchClient(connection: CompanionConnectio
     async dispose() { closed = true; stop.abort();clientOperations.clear();redirectSubscription?.();await redirected?.dispose?.();await streamTask; listeners.clear(); },
     async importFile(file:File){
       if(redirected?.importFile)return redirected.importFile(file);
-      const kind=/\.json$/i.test(file.name)?'backup':'text',response=await fetchHost('/imports?kind='+kind+'&name='+encodeURIComponent(file.name),{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});
+      const kind=/\.json$/i.test(file.name)?'backup':'text',source=kind==='text'?sourceFileFromSelection(file):undefined;
+      const query=new URLSearchParams({kind,name:file.name,...(source?.path?{sourcePath:source.path}:{})});
+      const response=await fetchHost('/imports?'+query,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});
       const result=await response.json();if(result.error)throw Error(result.error);if(result.connectArchiveId)await redirect(result.connectArchiveId);
     },
     async extendBookSourceFile(bookId:string,file:File,title?:string){
       if(redirected?.extendBookSourceFile)return redirected.extendBookSourceFile(bookId,file,title);
-      const query=new URLSearchParams({kind:'book-source',name:file.name,bookId,...(title!==undefined?{title}:{})});
+      const source=sourceFileFromSelection(file),query=new URLSearchParams({kind:'book-source',name:file.name,bookId,...(source.path?{sourcePath:source.path}:{}),...(title!==undefined?{title}:{})});
       const response=await fetchHost('/imports?'+query,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});
       const result=await response.json();if(result.error)throw Error(result.error);await synchronize();
     },

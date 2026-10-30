@@ -155,7 +155,7 @@ async function main() {
     const info = await fsp.stat(filename); if (!info.isFile()) throw Error('导入路径必须是普通文件。');
     context = {...target, importFile: filename};
     const url = new URL('/api/desktop-agent/import', connection.url);
-    for (const [key, value] of Object.entries({...target, kind, name: path.basename(filename), ...(kind === 'book-source' ? {bookId: options['book-id'], ...(options.title ? {title: options.title} : {})} : {})})) url.searchParams.set(key, value);
+    for (const [key, value] of Object.entries({...target, kind, name: path.basename(filename), ...(kind !== 'backup' ? {sourcePath: filename} : {}), ...(kind === 'book-source' ? {bookId: options['book-id'], ...(options.title ? {title: options.title} : {})} : {})})) url.searchParams.set(key, value);
     let response;
     try { response = await fetch(url, {method: 'POST', headers: {Authorization: 'Bearer ' + connection.token, 'X-Yixu-Client': 'local-agent', 'Content-Type': 'application/octet-stream'}, body: fs.createReadStream(filename), duplex: 'half', signal: AbortSignal.timeout(timeout)}); }
     catch { throw fail('导入连接中断，结果待核对；请查看当前存档与原导入记录，未自动重传。', {dispatch: 'unknown'}); }

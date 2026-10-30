@@ -206,6 +206,10 @@ function run() {
       if(!trustedRenderer(event)||typeof directory!=='string'||!path.isAbsolute(directory))throw Error('文件夹位置无效。');
       const error=await shell.openPath(directory);if(error)throw Error(error);
     });
+    ipcMain.handle('yixu:open-source-file-directory',async(event,filename)=>{
+      if(!trustedRenderer(event)||typeof filename!=='string'||!path.isAbsolute(filename))throw Error(t('原文文件位置无效。','Invalid source file location.'));
+      const error=await shell.openPath(path.dirname(filename));if(error)throw Error(error);
+    });
     ipcMain.handle('yixu:auto-reader-ready', (event, ready) => {
       if (!trustedRenderer(event) || !readyURL || event.senderFrame.url !== readyURL || typeof ready !== 'boolean') throw Error('阅读页面就绪通知来源不符。');
       readerReady = ready; return {accepted: true};

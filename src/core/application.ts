@@ -9,7 +9,7 @@ import {partnerAvatarAsset} from './partner-avatar.ts';
 import type {KnowledgeDocumentQuery} from './knowledge-distribution.ts';
 import {currentPublishedViews,viewProgress} from './published-views.ts';
 import {resolveStorageMaterials,storageMaterialOwners} from './storage-records.ts';
-import { bookLength, importBook, locateObservation,mergeRanges } from './books.ts';
+import { bookLength, importBook, bookSourceFile, locateObservation,mergeRanges } from './books.ts';
 import {AnalysisCore} from './analysis-core.ts';
 import type {WorkDossierRequest} from './work-dossier.ts';
 import type {AnswerScope} from './answer-materials.ts';
@@ -81,12 +81,12 @@ export class ApplicationActions {
   async closeLostMaintenance(jobId:string){await this.engine.closeLostMaintenance(jobId);}
   async dismissMaintenance(jobId:string){await this.engine.dismissMaintenance(jobId);}
   async restoreMaintenance(jobId:string,expected:Exclude<import('./types.ts').ReadingRecoveryExecution,'none'>){await this.engine.restoreMaintenance(jobId,expected);}
-  async importText(title: string, text: string) {
-    const book = await importBook(title, text);
+  async importText(title: string, text: string, sourceFile?:import('./types.ts').BookSourceFile) {
+    const book = await importBook(title, text, sourceFile);
     let bookId = book.id, existing = false;
     await this.engine.editScopedState({collections:{books:'all'}},state => {
       const prior = state.books.find(b => b.version === book.version);
-      if (prior) { bookId = prior.id; existing = true; } else state.books.push(book);
+      if (prior) { bookId = prior.id; existing = true; if(book.sourceFile)prior.sourceFile=book.sourceFile; } else state.books.push(book);
     });
     return { bookId, existing };
   }
@@ -118,11 +118,12 @@ export class ApplicationActions {
     const value=title.trim();if(this.engine.book(bookId).title===value)return;
     await this.engine.editScopedState({collections:{books:[bookId]}},state=>{state.books.find(book=>book.id===bookId)!.title=value;});
   }
-  async extendBookSource(bookId:string,raw:string,title?:string){
+  async extendBookSource(bookId:string,raw:string,title?:string,sourceFile?:import('./types.ts').BookSourceFile){
     if(title!==undefined&&(!title.trim()||title.trim().length>200||/[\r\n\u0000-\u001f]/u.test(title)))throw Error('书名须为1至200字的单行文字');
     const current=this.engine.book(bookId),version=current.version;
     const oldText=this.engine.store.readBookText?await this.engine.store.readBookText(version):current.text;
     const next=await prepareBookSourceExtension(current,oldText,raw,title?.trim()??current.title);
+    next.sourceFile=bookSourceFile(sourceFile);
     await this.runtime.stopCapture();await this.engine.pauseReadingSafely();
     if(this.engine.book(bookId).version!==version)throw Error('书籍原文已更换，请重新核对来源');
     await this.engine.installBookSource(next);

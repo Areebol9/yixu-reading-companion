@@ -1,5 +1,5 @@
 import {detectBookStructure} from './book-structure.ts';
-import type { Book, Chapter, Range } from './types.ts';
+import type { Book, BookSourceFile, Chapter, Range } from './types.ts';
 import { hashText } from './text-hash.ts';
 
 export function id(): string { return crypto.randomUUID(); }
@@ -42,13 +42,19 @@ export function applyFrontMatterBoundary(book: Book): boolean {
 export function normalize(text: string): string {
   return text.normalize('NFKC').replace(/[\s\p{P}\p{S}]/gu, '').toLowerCase();
 }
-export async function importBook(title: string, raw: string): Promise<Book> {
+export function bookSourceFile(value:BookSourceFile|undefined):BookSourceFile|undefined {
+  if(value===undefined)return undefined;
+  if(!value||typeof value.name!=='string'||!value.name||value.name.length>255||/[\\/\u0000-\u001f]/u.test(value.name))throw Error('原文来源文件名无效');
+  if(value.path!==undefined&&(typeof value.path!=='string'||value.path.length>32767||/[\u0000-\u001f]/u.test(value.path)||!/^(?:[a-z]:[\\/]|\/|\\\\)/i.test(value.path)))throw Error('原文来源文件位置须为完整路径');
+  return{name:value.name,...(value.path!==undefined?{path:value.path}:{})};
+}
+export async function importBook(title: string, raw: string, sourceFile?:BookSourceFile): Promise<Book> {
   const text = raw.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
   if (!text.trim()) throw new Error('文件中没有可读文字');
   if (text.length > 30_000_000) throw new Error('当前原型单本支持约三千万字符，请分卷导入');
   const version = await hashText(text);
   const detected=detectBookStructure(title,text),chapters=detected.chapters;
-  return { id: id(), title: title.replace(/\.txt$/i, ''), version, text, textLength: text.length, chapters,directory:{version,entries:chapters,unresolved:detected.ambiguous,method:'local'}, frontMatterEnd: frontMatterEnd(text, chapters), known: [], position: 0, prepared: [], archived: false, createdAt: Date.now() };
+  return { id: id(), title: title.replace(/\.txt$/i, ''), version, text, textLength: text.length, chapters,...(sourceFile?{sourceFile:bookSourceFile(sourceFile)}:{}),directory:{version,entries:chapters,unresolved:detected.ambiguous,method:'local'}, frontMatterEnd: frontMatterEnd(text, chapters), known: [], position: 0, prepared: [], archived: false, createdAt: Date.now() };
 }
 export function decodeBook(bytes: ArrayBuffer): string {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }

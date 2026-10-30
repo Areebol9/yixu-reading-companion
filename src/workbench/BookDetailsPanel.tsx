@@ -6,8 +6,9 @@ import {decodeBook} from '../core/books.ts';
 import {Dialog} from './components.tsx';
 import type {BookProjectLocations} from '../host/contract.ts';
 import './book-directory.css';
+import {sourceFileFromSelection} from './desktop-window.ts';
 
-export function BookDetailsPanel({book,onRename,onExtend,onExtendFile,onRecognizeDirectory,onGetProjectLocations,onSetProjectDirectory,backgroundModelReady,onClose}:{book:BookView;onRename:(title:string)=>Promise<void>;onExtend:(raw:string)=>Promise<void>;onExtendFile?:(file:File)=>Promise<void>;onRecognizeDirectory:(useModel:boolean)=>Promise<void>;onGetProjectLocations:()=>Promise<BookProjectLocations>;onSetProjectDirectory:(directory:string)=>Promise<BookProjectLocations>;backgroundModelReady?:boolean;onClose:()=>void}){
+export function BookDetailsPanel({book,onRename,onExtend,onExtendFile,onRecognizeDirectory,onGetProjectLocations,onSetProjectDirectory,backgroundModelReady,onClose}:{book:BookView;onRename:(title:string)=>Promise<void>;onExtend:(raw:string,sourceFile?:import('../core/types.ts').BookSourceFile)=>Promise<void>;onExtendFile?:(file:File)=>Promise<void>;onRecognizeDirectory:(useModel:boolean)=>Promise<void>;onGetProjectLocations:()=>Promise<BookProjectLocations>;onSetProjectDirectory:(directory:string)=>Promise<BookProjectLocations>;backgroundModelReady?:boolean;onClose:()=>void}){
   const [title,setTitle]=useState(book.title),[saving,setSaving]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [recognizing,setRecognizing]=useState<'local'|'model'|undefined>();
   const [locations,setLocations]=useState<BookProjectLocations>();
@@ -31,7 +32,6 @@ export function BookDetailsPanel({book,onRename,onExtend,onExtendFile,onRecogniz
   }
   const project=locations?.projects.find(project=>project.bookId===book.id);
   const folderName=project?.directory.split(/[\\/]/).filter(Boolean).at(-1);
-  const shortLocation=locations?.rootDirectory.split(/[\\/]/).filter(Boolean).slice(-3).join(' / ');
   return <Dialog title={t("书籍信息")} onClose={onClose}><div className="book-details">
     <form onSubmit={event=>{event.preventDefault();if(!saving&&title.trim()&&title.trim()!==book.title)void save(()=>onRename(title.trim()),t("书名已保存。"));}}>
       <label className="form-field"><span>{t("书名")}</span><input aria-label={t("书名")} value={title} maxLength={200} disabled={saving} onChange={event=>setTitle(event.target.value)} /></label>
@@ -41,11 +41,12 @@ export function BookDetailsPanel({book,onRename,onExtend,onExtendFile,onRecogniz
     <section className="book-source-details" aria-label={t("书籍工程与原文")}><h3>{t("书籍工程")}</h3>
       <p>{t("供 agents 使用的工作文件夹，与导入原文分开。")}</p>
       {project&&<p><strong>{folderName}</strong></p>}
-      {locations&&<p className="form-hint">{t("存放位置：")}{shortLocation}</p>}
-      {project&&<details><summary>{t("查看完整路径")}</summary><p className="form-hint" style={{overflowWrap:'anywhere'}}>{project.directory}</p></details>}
+      {(project||locations)&&<p className="form-hint" style={{overflowWrap:'anywhere'}}>{t("存放位置：")}{project?.directory??locations?.rootDirectory}</p>}
       <div className="book-directory-actions"><button type="button" className="btn btn-outline btn-small" disabled={saving||!window.yixuDesktop?.chooseProjectDirectory} onClick={()=>void changeProjectDirectory()}>{t("更改存放位置")}</button>{project&&<button type="button" className="btn btn-outline btn-small" onClick={()=>void window.yixuDesktop?.openProjectDirectory?.(project.directory).catch(reason=>setError(String(reason)))}>{t("打开文件夹")}</button>}</div>
       <p className="form-hint">{t("更改位置会迁移当前阅读存档中已有的书籍工程，新加入的书籍也使用该位置。")}</p>
-      <h3>{t("导入原文")}</h3><p>{t("原文保存在应用书库中，作为阅读来源。选择工程文件夹不会把整本原文复制进去。")}</p>
+      <h3>{t("原始 TXT 文件")}</h3>
+      {book.sourceFile?<><p style={{overflowWrap:'anywhere'}}>{t("文件名：")}{book.sourceFile.name}</p>{book.sourceFile.path?<><p className="form-hint" style={{overflowWrap:'anywhere'}}>{t("导入时的位置：")}{book.sourceFile.path}</p>{window.yixuDesktop?.openSourceFileDirectory&&<button type="button" className="btn btn-outline btn-small" onClick={()=>void window.yixuDesktop!.openSourceFileDirectory!(book.sourceFile!.path!).catch(reason=>setError(String(reason)))}>{t("打开原文所在文件夹")}</button>}</>:<p className="form-hint">{t("此入口记录了文件名；完整路径可通过本地客户端导入时记录。")}</p>}</>:<p className="form-hint">{t("来源文件信息可在导入 TXT 时记录。")}</p>}
+      <p className="form-hint">{t("阅读使用应用书库中按版本保存的正文副本。原始 TXT 保持原位置，修改它后需通过“更新正文”导入。书籍工程文件夹单独存放工作资料。")}</p>
     </section>
     <section className="book-source-details" aria-label={t("目录识别")}><h3>{t("目录")}</h3>
       <p>{(book.directory?.entries.length??book.chapters.length).toLocaleString(locale())} {t("个目录项")}{book.directory?.unresolved?t(" · 还有标题有待确认"):book.directory?t(" · 已识别"):t(" · 可重新识别部、卷和章节层级")}</p>
@@ -56,7 +57,7 @@ export function BookDetailsPanel({book,onRename,onExtend,onExtendFile,onRecogniz
     </section>
     <section className="book-source-details"><h3>{t("更新正文")}</h3><p>{t("选择包含后续章节的 TXT 文件。文件中已有的正文和章节顺序需与当前内容一致，更新后保留阅读位置、交流和伙伴资料。")}</p>
       <button type="button" className="btn btn-outline btn-small" disabled={saving} onClick={()=>fileInput.current?.click()}>{t("选择 TXT 文件")}</button>
-      <input ref={fileInput} type="file" accept=".txt,text/plain" aria-label={t("选择更新正文的 TXT 文件")} disabled={saving} hidden onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)void save(()=>onExtendFile?onExtendFile(file):file.arrayBuffer().then(bytes=>onExtend(decodeBook(bytes))),t("正文已更新，已有阅读记录已保留。"));}} />
+      <input ref={fileInput} type="file" accept=".txt,text/plain" aria-label={t("选择更新正文的 TXT 文件")} disabled={saving} hidden onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)void save(()=>onExtendFile?onExtendFile(file):file.arrayBuffer().then(bytes=>onExtend(decodeBook(bytes),sourceFileFromSelection(file))),t("正文已更新，已有阅读记录已保留。"));}} />
     </section>
     {saving&&<p className="form-hint" role="status">{t("正在保存书籍信息…")}</p>}
     {notice&&<p className="form-hint" role="status">{notice}</p>}

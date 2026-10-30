@@ -38,7 +38,7 @@ export interface ArchiveRuntime {
   partnerAvatar?(id:string):Promise<string|undefined>;
   download?(id:string):Promise<{name:string;filename:string;sha256:string;bytes:number}|undefined>;
   exportStatus?(id:string):Promise<import('./downloads.ts').ExportProgress|undefined>;
-  importFile?(input:{filename:string;kind:'backup'|'text'|'book-source';name:string;bookId?:string;title?:string;bytes:number;sha256:string;progress:(stage:string,details?:Record<string,unknown>)=>Promise<void>}):Promise<void|{connectArchiveId:string}>;
+  importFile?(input:{filename:string;kind:'backup'|'text'|'book-source';name:string;sourcePath?:string;bookId?:string;title?:string;bytes:number;sha256:string;progress:(stage:string,details?:Record<string,unknown>)=>Promise<void>}):Promise<void|{connectArchiveId:string}>;
 }
 export interface HostDomainFactory {
   openArchive(input: {

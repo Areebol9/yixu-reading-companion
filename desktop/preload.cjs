@@ -1,5 +1,5 @@
 'use strict';
-const {contextBridge, ipcRenderer} = require('electron');
+const {contextBridge, ipcRenderer, webUtils} = require('electron');
 const subscribe = (channel, listener) => {
   if (typeof listener !== 'function') throw new TypeError('listener must be a function');
   const handler = (_event, value) => listener(value);
@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('yixuDesktop', Object.freeze({
   getWindowState: () => ipcRenderer.invoke('yixu:window-state'),
   chooseProjectDirectory: current => ipcRenderer.invoke('yixu:choose-project-directory',current),
   openProjectDirectory: directory => ipcRenderer.invoke('yixu:open-project-directory',directory),
+  getSourceFilePath: file => webUtils.getPathForFile(file),
+  openSourceFileDirectory: filename => ipcRenderer.invoke('yixu:open-source-file-directory',filename),
   onWindowStateChanged: listener => subscribe('yixu:window-state-changed', listener),
   onAutoReadingRequested: listener => {
     if (typeof listener !== 'function') throw new TypeError('listener must be a function');

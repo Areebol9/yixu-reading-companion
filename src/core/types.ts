@@ -49,8 +49,11 @@ export type ReadingProfile = { readingStrategy: ReadingStrategy; narrativeMode: 
 /** Explicit local candidate capabilities; absence preserves the production protocol. */
 /** Explicit false values retain older behavior for frozen comparisons. */
 export type CompanionCandidate = { earlyReaction?:boolean; historicalSearch?:boolean; focusedExpression?:boolean; fairScheduling?:boolean; workspaceHandoff?:boolean };
+/** Local import provenance for display only; never model material. */
+export type BookSourceFile = {name:string;path?:string};
 export type Book = {
   id: string; title: string; version: string; text: string; textLength?: number; chapters: Chapter[];
+  sourceFile?:BookSourceFile;
   /** Navigational hierarchy is independent of stable reading-section indices. */
   directory?:BookDirectory;
   /** Every accepted historical hash names exactly this verified prefix, never

@@ -265,7 +265,7 @@ export class WorkbenchController implements WorkbenchClient {
   if(exclusive)this.busyAction=true;else this.readingActions++;this.error='';this.log.add('action',title);this.publish();
   try{await work();}catch(error){this.error=(error as Error).message??'操作未完成';this.log.add('error',this.error);throw error;}finally{if(exclusive)this.busyAction=false;else this.readingActions--;this.publish();this.persistMetadata();}
  }
- async importTxt(name:string,text:string){await this.action('导入本机文本',async()=>{const result=await this.application.command('importText',name,text);this.selectedBookId=result.bookId;await this.application.command('setReadingMode',result.bookId,'companion');this.pagePosition=readingStart(this.engine.book(result.bookId));});}
+ async importTxt(name:string,text:string,sourceFile?:import('../core/types.ts').BookSourceFile){await this.action('导入本机文本',async()=>{const result=await this.application.command('importText',name,text,sourceFile);this.selectedBookId=result.bookId;await this.application.command('setReadingMode',result.bookId,'companion');this.pagePosition=readingStart(this.engine.book(result.bookId));});}
  async getBookProjectLocations(){
   if(!this.environment.getBookProjectLocations)throw Error('请在桌面客户端管理书籍工程位置');
   return this.environment.getBookProjectLocations(this.session.id);
@@ -294,8 +294,8 @@ export class WorkbenchController implements WorkbenchClient {
  async jumpTo(position:number){await this.navigateTo(position);}
  async renameBook(id:string,title:string){await this.action('修改书名',()=>this.application.command('renameBook',id,title));}
  async recognizeBookDirectory(bookId:string,useModel:boolean){return this.application.command('recognizeBookDirectory',bookId,useModel);}
- async extendBookSource(id:string,raw:string,title?:string){await this.action('接续完整原文',async()=>{
-  await this.application.command('extendBookSource',id,raw,title);
+ async extendBookSource(id:string,raw:string,title?:string,sourceFile?:import('../core/types.ts').BookSourceFile){await this.action('接续完整原文',async()=>{
+  await this.application.command('extendBookSource',id,raw,title,sourceFile);
   this.inheritBookDrafts(id);if(this.autoReading.settings?.bookId===id){this.currentAutoReadingSettings();this.autoReading={phase:'stopped',settings:this.autoReading.settings,reason:'原文已接续，自动伴读保持停止。'};this.autoEpoch++;}
   if(this.selectedBookId===id){this.following=false;this.followEpoch++;this.lastVisible='';this.sourceVisible=false;this.visibleRange=undefined;this.sourceOwner=undefined;this.sourceRegistry.clear();this.sourceConnectionEpoch=crypto.randomUUID();this.pageEpoch++;this.navigationRevision++;this.chapterCache.clear();this.chapterLoads.clear();this.chapterFailures.clear();this.pureVolumeHeadings.clear();this.desiredPage='';this.engine.sourceActive(false);}
  });}

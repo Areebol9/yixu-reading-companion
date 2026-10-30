@@ -7,11 +7,17 @@ export interface YixuDesktop {
   getWindowState():Promise<DesktopWindowState>;
   chooseProjectDirectory?(current?:string):Promise<string|null>;
   openProjectDirectory?(directory:string):Promise<void>;
+  getSourceFilePath?(file:File):string;
+  openSourceFileDirectory?(filename:string):Promise<void>;
   onWindowStateChanged(listener:(state:DesktopWindowState)=>void):()=>void;
   onAutoReadingRequested?(listener:(request:{id:string;settings:AutoReadingSettings})=>void):()=>void;
   respondAutoReading?(id:string,result:{ok:boolean;error?:string}):void|Promise<void>;
 }
 declare global {interface Window {yixuDesktop?:YixuDesktop}}
+export function sourceFileFromSelection(file:File):import('../core/types.ts').BookSourceFile {
+  const path=window.yixuDesktop?.getSourceFilePath?.(file);
+  return{name:file.name,...(path?{path}:{})};
+}
 const browserState:DesktopWindowState={visible:true,focused:true,developerMode:true};
 const waitingState:DesktopWindowState={visible:false,focused:false,developerMode:false};
 let latest:DesktopWindowState|undefined;

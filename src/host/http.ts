@@ -9,6 +9,7 @@ import {once} from 'node:events';
 import {diffProjection} from './projection-delta.ts';
 import {Transform} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
+import {bookSourceFile} from '../core/books.ts';
 
 /** Loopback capability transport. SSE disconnect removes only a subscriber. */
 export async function serveArchive(host: ArchiveHost, config: {port: number; directory: string; origins: string[]; shutdown?: () => Promise<void>}) {
@@ -40,6 +41,7 @@ export async function serveArchive(host: ArchiveHost, config: {port: number; dir
       if(request.method==='POST'&&path==='/imports'){
         const url=new URL(request.url!,'http://127.0.0.1'),kind=url.searchParams.get('kind'),name=url.searchParams.get('name')??'导入文本',bookId=url.searchParams.get('bookId')??undefined,title=url.searchParams.get('title')??undefined;
         if(kind!=='backup'&&kind!=='text'&&kind!=='book-source')return json(response,400,{error:'文件导入类型无效'});
+        const sourcePath=kind==='backup'?undefined:bookSourceFile({name,path:url.searchParams.get('sourcePath')??undefined})?.path;
         if(kind==='book-source'&&(!bookId||bookId.length>200||title!==undefined&&(!title.trim()||title.length>200||/[\r\n\u0000-\u001f]/u.test(title))))return json(response,400,{error:'接续原文需要准确的bookId和有效书名'});
         const id=randomUUID(),directory=join(config.directory,'imports',id),filename=join(directory,'upload.bin'),receipt=join(directory,'progress.json');await mkdir(directory,{recursive:true});
         const state:Record<string,unknown>={schema:'yixu-file-import-v1',id,name,kind,stage:'uploading',startedAt:Date.now()};
@@ -48,7 +50,7 @@ export async function serveArchive(host: ArchiveHost, config: {port: number; dir
           await progress('uploading');const digest=createHash('sha256');let bytes=0;
           await pipeline(request,new Transform({transform(chunk,_encoding,done){bytes+=chunk.length;digest.update(chunk);done(null,chunk);}}),createWriteStream(filename,{flags:'wx',mode:0o600}));
           const sha256=digest.digest('hex');await progress('uploaded',{bytes,sha256});
-          const result=await host.importFile({filename,kind,name,...(kind==='book-source'?{bookId,title}:{}),bytes,sha256,progress});
+          const result=await host.importFile({filename,kind,name,sourcePath,...(kind==='book-source'?{bookId,title}:{}),bytes,sha256,progress});
           await progress('complete',{completedAt:Date.now()});await unlink(filename);return json(response,200,{id,bytes,sha256,status:'complete',...result});
         }catch(error){await progress('failed',{error:String(error),failedAt:Date.now()});throw error;}
       }

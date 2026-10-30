@@ -94,7 +94,7 @@ export interface WorkbenchClient {
   waitReadingDelay?(milliseconds:number,signal:AbortSignal):Promise<void>;
   getSnapshot(): WorkbenchSnapshot;
   subscribe(listener: () => void): () => void;
-  importTxt(name: string, text: string): Promise<void>;
+  importTxt(name: string, text: string, sourceFile?:import('../core/types.ts').BookSourceFile): Promise<void>;
   importBackup(raw: string): Promise<void>;
   saveDraft(key:string,value:WorkbenchDraft|null):Promise<void>;
   /** Renderer transport capability; file bytes are not an application command argument. */
@@ -106,7 +106,7 @@ export interface WorkbenchClient {
   getBookProjectLocations():Promise<import('../host/contract.ts').BookProjectLocations>;
   setBookProjectRootDirectory(directory:string):Promise<import('../host/contract.ts').BookProjectLocations>;
   recognizeBookDirectory(bookId:string,useModel:boolean):Promise<{entries:number;unresolved:boolean}>;
-  extendBookSource(id:string,raw:string,title?:string):Promise<void>;
+  extendBookSource(id:string,raw:string,title?:string,sourceFile?:import('../core/types.ts').BookSourceFile):Promise<void>;
   jumpTo(position: number): Promise<void>;
   turnPage(delta: number): Promise<void>;
   estimateAutoReading(targetChapterIndex:number):Promise<AutoReadingEstimate>;

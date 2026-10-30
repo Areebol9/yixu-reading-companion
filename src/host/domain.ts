@@ -24,11 +24,11 @@ import {providerBridge} from './provider-gateway.ts';
 
 /** File transport only. Ownership, version proof and saving stay in the normal
  * application operation, after the explicitly selected archive is paused. */
-export async function importBookSourceFile(controller:Pick<WorkbenchController,'getSnapshot'|'extendBookSource'>,input:{filename:string;bookId?:string;title?:string}){
+export async function importBookSourceFile(controller:Pick<WorkbenchController,'getSnapshot'|'extendBookSource'>,input:{filename:string;name?:string;sourcePath?:string;bookId?:string;title?:string}){
   const snapshot=controller.getSnapshot(),control=snapshot.app.readingControl;
   if(!input.bookId||!snapshot.app.state.books.some(book=>book.id===input.bookId)||snapshot.following||snapshot.busyAction||snapshot.app.busy||control?.state==='running'||control?.state==='stopping'||control?.inFlight)throw Error('请先暂停并收好当前请求，再接续指定书籍的完整原文');
   const {decodeBook}=await import('../core/books.ts'),bytes=await readFile(input.filename);
-  await controller.extendBookSource(input.bookId,decodeBook(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer),input.title);
+  await controller.extendBookSource(input.bookId,decodeBook(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer),input.title,input.name?{name:input.name,...(input.sourcePath?{path:input.sourcePath}:{})}:undefined);
 }
 
 const factory: HostDomainFactory = {
@@ -124,7 +124,7 @@ const factory: HostDomainFactory = {
             finally{portableImport=undefined;await staging.close();}
           }else{if(process.env.YIXU_DESKTOP==='1')throw Error('新客户端仅接收新版完整便携备份，原文件保持');const parsed=await readJsonFile(input.filename,progress);await last;await input.progress('validating');await controller.importBackupState(parsed);}
         }else if(input.kind==='book-source')await importBookSourceFile(controller,input);
-        else{const {decodeBook}=await import('../core/books.ts');const bytes=await readFile(input.filename);await controller.importTxt(input.name,decodeBook(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer));}
+        else{const {decodeBook}=await import('../core/books.ts');const bytes=await readFile(input.filename);await controller.importTxt(input.name,decodeBook(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.byteLength) as ArrayBuffer),{name:input.name,...(input.sourcePath?{path:input.sourcePath}:{})});}
         const connectArchiveId=input.kind==='backup'?controller.takeConnectionTarget():undefined;await synchronizeProjects();await controller.flush();await input.progress('published',{archiveId:connectArchiveId??archiveId});return connectArchiveId?{connectArchiveId}:undefined;
       },
       async dispose() { await controller.dispose(); await computation.dispose();await bridge.close();releaseNativeEvents(); },

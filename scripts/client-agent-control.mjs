@@ -105,6 +105,7 @@ export async function startClientAgentControl({dataRoot,coordinator,pageOrigin,n
     const input=Object.fromEntries(url.searchParams),kind=input.kind;if(!['text','backup','book-source'].includes(kind)||typeof input.name!=='string'||!input.name||input.name.length>255)throw new AgentControlError('文件导入类型或名称无效',400);
     if(kind==='book-source'&&(!input.bookId||input.bookId.length>200||input.title!==undefined&&(!input.title.trim()||input.title.length>200||/[\r\n\u0000-\u001f]/u.test(input.title))))throw new AgentControlError('接续原文需要准确的bookId和有效书名',400);
     const connection=await selected(input,{requireCurrent:true}),target=new URL('/imports',connection.url);target.searchParams.set('kind',kind);target.searchParams.set('name',input.name);
+    if(kind!=='backup'&&input.sourcePath!==undefined)target.searchParams.set('sourcePath',input.sourcePath);
     if(kind==='book-source'){target.searchParams.set('bookId',input.bookId);if(input.title!==undefined)target.searchParams.set('title',input.title);}
     dispatch={archiveId:input.archiveId,epoch:input.epoch,dispatch:'unknown'};
     const abort=new AbortController();request.once('aborted',()=>abort.abort());

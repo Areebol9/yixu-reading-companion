@@ -27,7 +27,7 @@
     },
     {
       "path": "scripts/client-agent-control.mjs",
-      "sha256": "c9c70361c325c20feb23e07ca760502af4bb696ff9c8cc0afbfa978894eae3ca"
+      "sha256": "b724ebba681ae095aea196c06e10493983bfe40f3c40a40539cbfb925b541b57"
     },
     {
       "path": "scripts/client-bridge.mjs",
@@ -219,7 +219,7 @@
     },
     {
       "path": "src/core/application.ts",
-      "sha256": "0fe2649b8a66a249d3e0e274ce376908b23eae823b8b6a33aa0b56e00e5f3f18"
+      "sha256": "d7e8e9d490564e0d12dbb3b8369bc80517348e8df1e4ebdfe3593c3f67b3be63"
     },
     {
       "path": "src/core/arc-schema.ts",
@@ -231,7 +231,7 @@
     },
     {
       "path": "src/core/backup.ts",
-      "sha256": "2abb19b16646391ebae7a0239d2272f3c824c58179bf0b307b0ff42142a4d5f5"
+      "sha256": "f3df95dcce0d507720b427635746c59770d1e3cee63d7b6aaf63b1f2f3753445"
     },
     {
       "path": "src/core/basis.ts",
@@ -259,7 +259,7 @@
     },
     {
       "path": "src/core/books.ts",
-      "sha256": "01b2a34acf9819208c2c8f671e5ddcc598bcb88e674d1e7139e508dd80187d5d"
+      "sha256": "71caed382d98625789ea4c3fed3341329296f2fa1a605bca37d9c645a35df2ab"
     },
     {
       "path": "src/core/companion-correction-repair.ts",
@@ -679,7 +679,7 @@
     },
     {
       "path": "src/core/types.ts",
-      "sha256": "b58a4951768d61678d2355de651aec79f0a73b548c13d02501cf22c17f3f10cb"
+      "sha256": "44a72371a22f96d3ebba5384b475fcbe0d78c7646a9ca5feda35f0a468a7bef6"
     },
     {
       "sha256": "2beb9434121166b54b713db06bfc8331186037b873ad92eb95bcd1704fc7880a",
@@ -731,7 +731,7 @@
     },
     {
       "path": "src/host/contract.ts",
-      "sha256": "7a522ba9f5a2bd152e37d445e5d687bf809ccc3500ff2bfdc0f7fffbe2c995dc"
+      "sha256": "522ad1c966a8cbad99fd44de58b0160bc4a083a64bc2ce9f14de406b7a88736e"
     },
     {
       "path": "src/host/domain-computation-worker.ts",
@@ -743,7 +743,7 @@
     },
     {
       "path": "src/host/domain.ts",
-      "sha256": "798d2a92f9d3b2b5872b640bc6f1a0d99a1aaa325e864dd4e83a70b993e59552"
+      "sha256": "90886f74caa4fc438ae9f8d25168a65d313490cb0ec901fd0043ea79495aa128"
     },
     {
       "path": "src/host/downloads.ts",
@@ -751,7 +751,7 @@
     },
     {
       "path": "src/host/http.ts",
-      "sha256": "1f163170396a6bdf0f06528373909ad55e73d070fff33bcaeec4275b9de42dea"
+      "sha256": "07b78b89232da41b067d356c9d35c62673a0af11a252ec4a2a4b4e5422cb0cfa"
     },
     {
       "path": "src/host/json-reader.ts",
@@ -859,7 +859,7 @@
     },
     {
       "path": "src/workbench/BookDetailsPanel.tsx",
-      "sha256": "b923b7eb4f634c474d0706b7e1002c92b63408eb8c1e0866e4f2ea8a9a65189f"
+      "sha256": "2e74702265b71b5be32213b48faa88087901e889bce7ba5072ad58435a041e14"
     },
     {
       "path": "src/workbench/BookDirectory.tsx",
@@ -875,7 +875,7 @@
     },
     {
       "path": "src/workbench/contract.ts",
-      "sha256": "974fa9f69de7ba1b503c8030d811c0fe0d43de2c9f6a092a1b8559e459446e90"
+      "sha256": "faa9e06a3312b44c3aa65c4171dd2f719ea116f1b19f3f5022d67aec977ec948"
     },
     {
       "path": "src/workbench/copy.ts",
@@ -883,7 +883,7 @@
     },
     {
       "path": "src/workbench/desktop-window.ts",
-      "sha256": "f777c63a530afa8592e1dcb644cdbf31bb3cfcf2e6d2d16e3c6e7b7fcf7959fe"
+      "sha256": "d30f78e7aca098ffef3c90f44d5a0dfb47d0c8a25380346326122351032cdacb"
     },
     {
       "path": "src/workbench/draft-versions.ts",
@@ -911,7 +911,7 @@
     },
     {
       "path": "src/workbench/i18n-process.en.ts",
-      "sha256": "dc08d52c8b3e311a10b4780d8559b40630cea2761c6c5e323ef967bf854d2143"
+      "sha256": "70a9545d8b90918135bb40fe132b6cc50c52d194a3ba7ff523d8c40b59c11bf4"
     },
     {
       "path": "src/workbench/i18n-ui.en.ts",
@@ -1011,7 +1011,7 @@
     },
     {
       "path": "src/workbench/remote-client.ts",
-      "sha256": "0bf047b55f4e3cc1dec35cf79d2650dcc5001aa16f81e75b83a2abbcd420e121"
+      "sha256": "f1dc0cce68ac4e90181d5a5b886ec6aa61a1b6e0b16fdd3eee6f262198d7421a"
     },
     {
       "path": "src/workbench/reply-visibility.ts",
@@ -1023,7 +1023,7 @@
     },
     {
       "path": "src/workbench/runtime.ts",
-      "sha256": "55692383066532f2188aa9761548e2b88dcaaa68656713097dbd6d6e54f6ba1f"
+      "sha256": "021b0063221fa98863618de906291b454e4d6f490c4bd50724e036dfc47ce896"
     },
     {
       "path": "src/workbench/SettingsPanel.tsx",
@@ -1067,7 +1067,7 @@
     },
     {
       "path": "src/workbench/Workbench.tsx",
-      "sha256": "5656a4018ebac874edcd1eeb07160c0cdabd87d2ea72ef8cadd1ccbe8ee7d5cd"
+      "sha256": "0ecda6e46668ad9155a07fe61900e20d09e248a61fcd5ace2e0ba8d9c1bcd936"
     },
     {
       "path": "workbench.html",
