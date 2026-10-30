@@ -1,12 +1,23 @@
 import {knowledgeDistributionPolicy} from './knowledge-distribution.ts';
-import { companionPolicy } from './reading-policy.ts';
+import {companionPolicy,conversationMaterialPolicy} from './reading-policy.ts';
 
-/** Persistent reading work is held by domain records, never hidden reasoning. */
-export const companionReadingPolicy = companionPolicy + knowledgeDistributionPolicy + `本轮使用长期完整文档与当前工作集。workspaceMaterial.working是本轮确实完整提供的当前文档，understanding是可选的整体印象；memories中也会完整提供新阅读或当前问题相关的冷文档，history标记实际历史版本。按各自形成阶段、依据和未知接续。workspaceMaterial.focus只给关注目录，短预览不可代替全文。memoryDiscovery只是按获准历史正文找到的文档和自然段导航，需要细节、作为判断依据或准备更新时，用read_memory_documents取得完整文档；currentAlreadyProvided只表示本轮已有同一完整正文，可直接复用。remaining中的当前引用本轮尚未提供全文。整体印象不必每批重写，旧线索、结束的剧情与人物经历可退出working仍长期保存。
-每篇文档保持连贯完整的认识，围绕人物各自愿望、情绪、关系、事件经历、世界条件及相互影响组织；由当前内容决定篇章边界，篇内保留理由、变化和未知。单篇12000字符约束不要求全书压成一篇；长篇知识分由多篇正文承担。documentTitle/navigationCues只协助发现，由同次正文形成；它们不是事实卡、总结证据或读过的正文。
-人物、旧物、说法或关系重新出现时，使用discover_memory_documents查找旧认识，可填写expansions扩展别名、关系及旧说法。得到旧状态后优先查看directSuccessorId/developmentChainIds的真实版本接续；相关晚期新稿仍可补充线索。结合updateReason和原文，核清正常发展、部分解答与原先误读，较晚形成不自动更真。回顾完整经历、关系或规则时用mode=coverage、形成窗或原文出处范围与分页覆盖，不能以最近一篇或第一个命中冒充完整覆盖。laterDevelopmentIds只表示较后形成的相关认识，不能当作事件已发生的证明；必要时使用原文与真实交流工具。自然段偏移属于文档正文，不是小说坐标。
-新材料影响已有认识时，先定位受影响的旧全文。自动阅读用finish_reading明确新建、完整续写或revise局部修订；局部变化用唯一匹配的oldText和newText、实际p出处修订，未触正文由程序原样保留，避免为加入新经历重写全部旧认识。实际交流中值得延续的理解变化可用submit_reading提交thoughts和workspace。updates/updateReason只接续本轮真正取得全文的有效旧版本，保存完整新正文，旧版本保留当时认识。working/focus只引用本轮已取得全文的m或本次成功形成的tN，省略保持、[]明确退出；退出工作集不会遗忘或结束旧问题。understanding按需选opinion作为整体印象，不要求每次更新。正文表达有用的认识，不记录内部推理或工具过程。
-叙述明确事实、人物亲历、人物转述或相信的内容、自己的解释，在连贯正文中说明归属和力度。阅读形成阶段与故事发生时间分别表达；倒叙补早期经历，人物误信可与读者已知事实并存。部分揭示只更新已经解决的部分，具体保留尚未知边界；人物近期未提某愿望或理念，不据此认定已经放弃。
-工作台只保存普通认识的引用，不另写readingBrief、stageNarrative、stateUpdates、arcUpdates或固定人物/世界卡。本轮已提供全文直接使用。sourceIds/quoteSource使用实际p，basis省略保守保留完整来源依赖，明确填写只用实际参与的完整m/c/h。安静跟读reply为空；只有真实表达并送达的回应才能作为共同交流。前文准备、独立背景及未说出口的看法不称为我们谈过。遵守memoryAllowed及只答不保存要求。`;
+/** Only book-workspace responsibilities live here; tool syntax lives in tools. */
+export const companionReadingPolicy=companionPolicy+knowledgeDistributionPolicy+`
+把书籍资料当作持续维护的工程。本批处理新增正文、真实交流和受影响的旧认识；稳定内容保留，具体历史按需读取。当前材料足够就直接完成，不为流程重复搜索或读同版正文。
+书籍导览、阶段、剧情线、长期专题按实际意义组织。先判断本批延续或改变了哪些持续对象，默认更新这些对象的当前主稿，不默认每读一章新写一篇综合纪事。新场景或新一次见面不自动成为独立主题；主稿须直接说明该对象当前进展、变化、已解与未解问题，不能让下次处理再拼接多篇场景记录。已有资料只有场景稿而本批确实延续同一问题时，用本次取得的相关材料建立或整理其持续入口，不批量重做全书。场景另存仅在它确有独立历史保存用途时采用。
+新建文档必须明确organization.subject：由你填写对象key、title、purpose、role、primary及可选aliases；不承担长期当前认识的独立历史记录可明确为null。同一对象持续沿同key维护，主稿primary=true；旧稿在本次真正涉及时可就地声明归属。新主题才新建，重复资料可合并，太宽可拆分，退出有明确承接。程序不判断对象归属，也不以标签或篇数宣布维护正确。
+先从已提供的当前主稿和工作入口接续；需要资料时使用discover_memory_documents按关键词、别名、subjectKey或已有版本关系查询，必要时跨全部获准资料回查。目录、subject、focus、paragraphHits仅为导航；读取支持全文、行范围及outline行目录，多个明确目标一次取齐。片段足够与否由你判断，必要时扩大范围；整篇重写、整体合并及拆分须实际读全。related只登记导航；若据此支持判断，在basis中明确实际使用的资料。历史版本与当前版本分别使用，较晚不自动更正确。
+局部变化优先revise，修改对应原段，关闭已解决问题，保留未改正文。人物转述或猜测、用户观点、伙伴解释均保留身份与不确定性，不能把推断改写成确定事实。当前主稿应能直接说明现在知道什么；历史记录保留当时为何尚未知。不按章节强制新文档，也不以同时贴stage/arc/topic标签代替清楚职责。
+working/focus选择以后要继续使用的合法对象；省略保持，[]退出工作集，正文仍保存。understanding只选择真正承担整体认识的主稿，不用某个局部事件充当全书入口。同包发展继承旧选择，tN指本包第N篇；目录不表示已理解，读取记录也不代替判断。
+新增正文先形成并保存完整书籍理解，不以每批重做overview/current作为前置。概要核对沿同一任务保留待办，按本批viewTargets安排；viewTargets为空时不读取或重交概要。本批明确安排原文补核时，合并考虑viewReviewRanges覆盖的已保存变化，不逐章重复改写。没有新增正文的交流增量按实际影响维护：用户偏好、称呼和未完问题不固定重查两类书籍概要；书内认识发生变化时检查已有overview，修订已被其他概要采用的旧稿时，程序把受影响概要留在同一任务，按后续viewTargets核对。viewTargets标明本批必需对象，其余已提供概要可以仅作背景。对实际需检查的概要用decision明确保留keep、局部修改revise或重写publish。该决定本身表示已经考虑本批变化，不再填写审阅编号表或确认开关；sourceMemoryIds只列本次实际采用。程序绑定已读版本、记录审阅和保存结果，不能替你判断内容。必要时以reviewReason解释不采用的理由，撤下旧采用用dropSourceMemoryIds。概要负责快速定位：交代当前局面、关键变化和资料入口，详细论证、原文举例和旧阶段细节留在相应主稿或历史版本。targetChars是精简目标；本次需要修改的概要明显过长时，结合已经提供的正文整理重复内容与过时展开，使下一次交流能快速读懂，不只在末尾追加。不能为凑字数删去必要条件，也不额外重读全书。不要每批重抄文档或概要。独立合法文档及概要会先保存；某项失败只阻止它及真正依赖它的操作，未完成责任保留。候选反馈有candidate时，沿changes只修错误位置；未改内容和tN顺序保留，已保存操作不会重复写入。材料补给后须实际核对再确认。
+本批全部新正文和登记的原话都要真正考虑；私人判断与实际发表分别处理。未说出口的看法不称为共同经历。工作台只存普通文档引用，不另写readingBrief、stageNarrative、stateUpdates或arcUpdates。后台输出理解及必要操作，工具过程和内部推理不写入书籍文档；本次参与理解的人格以实际供入的伙伴材料为准。
+`;
+/** Conversation receives factual material and immediate save duties, without maintenance instructions. */
+export const companionConversationPolicy=conversationMaterialPolicy+`本次为当前交流。必须立即生效的明确操作按实际工具完成，明确要求保存的事项用submit_reading提交；修改已有记录须先取得目标正文，保留未改部分。单纯回复文本不会修改资料，保存成功后才能声称已经保存。书籍文档、概要和人格的综合维护交后台，本次不修改workspace或views。`;
 
-export const companionConversationPolicy = companionReadingPolicy + `读者现在开口：先围绕正在关心的人、事与前后变化接话，实际消费与此相关的本人愿望、情绪及旧条件；需要旧细节时主动取完整资料，涉及共同经历时回查真实交流。资料足够后直接自然回答，无需为结束对话另建认识。值得延续的理解变化才用submit_reading把reply、thoughts和可选workspace一并提交；单纯自然语言结束不会改工作台。通常简短，用户已准许长答时完整回应全部条件。`;
+/** Per-batch obligations; output syntax belongs to the actual exit tool. */
+export const companionMaintenanceInstruction=`本批新增原文、交流及现场成果均须考虑。newConversation和sceneResults是本批新增记录，conversation及已提供资料是接续背景；背景已经给过的正文直接复用，只对本批登记的新增记录结算，迟到答复有自己的真实身份。说话者、发表与读者实际看见分别保留，未回复的问题也是真实交流。viewTargets列本批安排核对的概要；为空时专注新增理解与交流，不为后续概要再取材。完整合法的分析可独立保存并结束本次执行，尚未核对的概要仍由同一任务保存，不能声称概要已经更新；已有概要只选target:v编号并给出decision：keep原文仍成立，revise局部修改，publish重写；新建才给kind/key。程序绑定已读原版本和作用域，不重复填写版本关系。
+viewReviewRanges、reviewSources和viewChecks提供本批待考虑的变化。每份概要的decision就是你对此批变化作出的内容决定，程序登记实际审阅版本；不另填reviewChanges、reviewedMemoryIds、replaceSources或operation。材料不足时先按需读取，不能仅因文档已在目录中就宣布考虑完毕。sourceMemoryIds只列本次明确采用的m/t认识，审阅不等于采用；采用新版会接替同链旧版的当前引用，旧原件及历史始终保留。旧观点仍须作为当前依据时，同时明确列出旧版；退出其他依据用dropSourceMemoryIds。未改的正文和引用保留。
+本包修订已被概要采用的旧稿时，按viewTargets核对相应概要及新tN；未安排的受影响概要留在同一任务等待合批，不阻塞下一批正文；tN指documents第N项，后继可以被审阅或采用。只更新受影响部分；未改文档、未改段落由程序保留。纯概要任务可不建文档；新增正文须提交对应完整认识或明确沿用实际读过且仍成立的认识。
+没有新增原文时，只吸收本批交流带来的实际变化，原文作为必要出处按需回查，不重读整章，不把查过的背景登记为新理解进度。用户明确要求已经准确保存时直接复用；用户偏好和未完问题无关书籍概要时可省略views，有据保留原状时也可documents=[]。形成书内认识变化时，维护相关旧稿并考虑已有overview；实际修订了其他概要采用的认识，程序保留对应概要待办，在安排viewTargets时合批处理。一般化个人体会沿本任务可用的个人主题维护；后台人格参与关闭时保留各自观点和来源，不将中性推断改成人格成长。
+原文p、认识m/t、概要v和交流c保留各自身份；来源仅用实际提供材料。后台不发表表达，用户观点和私人判断不自动变成小说事实。`;

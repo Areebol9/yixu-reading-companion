@@ -1,0 +1,16 @@
+.markdown-message{min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere;line-height:inherit}
+.markdown-message p{margin:0 0 .75em;white-space:pre-wrap}
+.markdown-message>:first-child{margin-top:0}.markdown-message>:last-child{margin-bottom:0}
+.markdown-message strong{font-weight:650}.markdown-message em{font-style:italic}
+.markdown-message h1,.markdown-message h2,.markdown-message h3,.markdown-message h4,.markdown-message h5,.markdown-message h6{font-size:1.08em;font-weight:650;line-height:1.5;margin:1em 0 .45em;color:inherit}
+.markdown-message ul,.markdown-message ol{margin:.4em 0 .8em;padding-inline-start:1.5em}
+.markdown-message li{padding-inline-start:.12em}.markdown-message li>p{margin:.25em 0}
+.markdown-message blockquote{margin:.7em 0;padding:.2em 0 .2em .85em;border-left:3px solid #ccc0b3;color:#786e64;background:none}
+.markdown-message code{font-family:ui-monospace,Consolas,monospace;font-size:.9em;background:#eee9e4;padding:.1em .3em;border-radius:4px}
+.markdown-message pre{max-width:100%;overflow:auto;white-space:pre;background:#f0ece9;padding:12px;border-radius:8px;margin:.7em 0}
+.markdown-message pre code{padding:0;background:none;border-radius:0;white-space:pre}
+.markdown-message table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;margin:.7em 0;font-size:.95em}
+.markdown-message th,.markdown-message td{padding:6px 9px;border:1px solid #e0d8d1;text-align:left;min-width:3em}.markdown-message th{font-weight:600}
+.markdown-message hr{border:0;border-top:1px solid #e0d8d1;margin:1em 0}
+.markdown-message a{text-decoration:underline;text-underline-offset:3px}
+.markdown-message input[type=checkbox]{width:auto;margin-inline-end:.4em}.markdown-message .task-list-item{list-style:none}

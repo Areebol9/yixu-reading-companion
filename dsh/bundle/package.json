@@ -1,0 +1,8 @@
+{
+  "name": "@yixu/dsh-companion-bundle",
+  "private": true,
+  "version": "0.2.1-rc.2",
+  "type": "module",
+  "dsh": {"bundle": {"patch": "./cordis.patch.yml"}},
+  "peerDependencies": {"@deepseek-ai/dsh": "0.2.1-rc.2"}
+}

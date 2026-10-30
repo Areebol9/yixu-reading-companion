@@ -47,16 +47,26 @@ export function memoryContentIdentity(memory:Memory):Identity {
 /** The exact pre-externalization record shape used by historical repair stamps. */
 export function legacyMemoryRecord(memory:Memory):Record<string,unknown> {
   if(typeof memory.text!=='string')throw Error('阅读档案正文尚未载入，请先读取所需档案');
-  const {bodyRef,documentTitle,navigationCues,knowledgeDistribution,...record}=memory;return record;
+  const {bodyRef,documentTitle,navigationCues,knowledgeDistribution,organization,...record}=memory;return record;
 }
 export function memorySourceRecord(memory:Memory):Record<string,unknown> {
-  const {text,bodyRef,documentTitle,navigationCues,knowledgeDistribution,...record}=memory;
+  const {text,bodyRef,documentTitle,navigationCues,knowledgeDistribution,organization,...record}=memory;
   return {...record,contentIdentity:memoryContentIdentity(memory)};
 }
 function canonical(value:unknown):unknown {
   if(Array.isArray(value))return value.map(canonical);
   if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical((value as Record<string,unknown>)[key])]));
   return value;
+}
+/** Exact content/provenance version. Development pointers, navigation and
+ * storage residency are mutable and do not revoke an otherwise readable version. */
+export function memoryReadVersion(memory:Memory):string {
+  const {id,bookId,partnerId,kind,source,backgroundOrigin,evidence,sourceEvidence,sourceQuote,parents,chatIds,basis,formationSources,writeBaseIds}=memory;
+  return JSON.stringify(canonical({id,bookId,partnerId,kind,source,backgroundOrigin,evidence,sourceEvidence,sourceQuote,parents,chatIds,basis,...(formationSources?{formationSources:formationSources.materialRef??formationSources,writeBaseIds}:{}),content:memoryContentIdentity(memory)}));
+}
+export function memoryReadVersionDifferences(expected:string,memory:Memory):string[]{
+  const before=JSON.parse(expected) as Record<string,unknown>,after=JSON.parse(memoryReadVersion(memory)) as Record<string,unknown>;
+  return [...new Set([...Object.keys(before),...Object.keys(after)])].filter(key=>JSON.stringify(before[key])!==JSON.stringify(after[key]));
 }
 /** Compare JSON semantic records without rewriting historical saved stamps. */
 export function stampsEqual(a:string,b:string):boolean {

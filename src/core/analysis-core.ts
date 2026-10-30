@@ -1,4 +1,5 @@
 import {hydrateMemoryBodies} from './memory-bodies.ts';
+import {resolveStorageMaterials,storageMaterialOwners} from './storage-records.ts';
 import {readStructureRelations} from './structure-relations.ts';
 import {projectWorkDossier,parseWorkDossierRequest} from './work-dossier.ts';
 import type {WorkDossierRequest,WorkDossierResult} from './work-dossier.ts';
@@ -65,6 +66,7 @@ export class AnalysisCore{
   }
   async backup():Promise<string>{
     const base=this.engine.state,copy:State=structuredClone({...base,memories:base.memories.map(({text,...metadata})=>metadata),books:base.books.map(b=>({...b,text:'',textLength:bookLength(b)}))});
+    const owners=storageMaterialOwners(copy);await resolveStorageMaterials(owners,this.engine.store.readTaskMaterials?.bind(this.engine.store));for(const owner of owners)delete owner.materialRef;
     for(let start=0;start<copy.memories.length;start+=64){if(this.engine.state!==base)throw Error('资料已切换，请重新备份');const batch=copy.memories.slice(start,start+64);batch.forEach((m,i)=>{if(base.memories[start+i].text!==undefined)m.text=base.memories[start+i].text;});await hydrateMemoryBodies(this.engine.store,batch);batch.forEach(m=>delete m.bodyRef);}
     for(const book of copy.books){if(this.engine.state!==base)throw Error('资料已切换，请重新备份');book.text=await this.engine.withOriginal(book.id,original=>original.text);}
     if(this.engine.state!==base)throw Error('资料已切换，请重新备份');return JSON.stringify(copy);

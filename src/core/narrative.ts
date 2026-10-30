@@ -1,3 +1,4 @@
+import {bookVersionAllowsRanges} from './book-versions.ts';
 import {requireMemoryText} from './memory-bodies.ts';
 import { READING_MEMORY_LIMIT,isReadingDelivery } from './types.ts';
 import { bookLength, chapterAt, covers, id, mergeRanges, normalize } from './books.ts';
@@ -36,7 +37,7 @@ export function stageReadings(state: State, book: Book, source: Memory['source']
       seen.add(m.id);m=all.get(m.replacedBy??'');
     }
   };
-  const records=(state.readings??[]).filter(r=>r.bookId===book.id&&r.version===book.version&&r.partnerId===state.partnerId&&
+  const records=(state.readings??[]).filter(r=>r.bookId===book.id&&bookVersionAllowsRanges(book,r.version,r.ranges)&&r.partnerId===state.partnerId&&
     r.processing!=='layout'&&(r.source==='background')===(source==='background')&&
     isEvidenceAllowed(book,r.ranges.map(p=>({...p,bookId:book.id,version:book.version})),extra)&&
     r.ranges.every(p=>covers(r.source==='background'?book.backgroundPrepared??[]:book.prepared,p)))
@@ -71,7 +72,7 @@ export function narrativeIndex(state: State, book: Book, eligible: Memory[], ext
     }
   };
   for (const record of state.readings ?? []) {
-    if (record.bookId !== book.id || record.version !== book.version || record.partnerId !== state.partnerId ||
+    if (record.bookId !== book.id || !bookVersionAllowsRanges(book,record.version,record.ranges) || record.partnerId !== state.partnerId ||
       !isEvidenceAllowed(book, record.ranges.map(r => ({ ...r, bookId: book.id, version: book.version })), extra) ||
       record.ranges.some(r => !covers(record.source === 'background' ? book.backgroundPrepared ?? [] : book.prepared, r))) continue;
     const chapters = chaptersFor(record.ranges);
@@ -125,7 +126,7 @@ export function validateNarrativeState(state: State): void {
   const seen = new Set<string>(), memories = new Map(state.memories.map(m => [m.id, m]));
   for (const r of state.readings ?? []) {
     const book = state.books.find(b => b.id === r?.bookId);
-    if (!book || typeof r.id !== 'string' || !r.id || seen.has(r.id) || r.version !== book.version || !state.partners.some(p => p.id === r.partnerId) ||
+    if (!book || typeof r.id !== 'string' || !r.id || seen.has(r.id) || !bookVersionAllowsRanges(book,r.version,r.ranges??[]) || !state.partners.some(p => p.id === r.partnerId) ||
       !['reading','preparation','background'].includes(r.source) || !Array.isArray(r.ranges) || !r.ranges.length || r.ranges.length > 5000 ||
       r.arcCandidate!==undefined&&r.arcCandidate!=='v1'||r.worldCandidate!==undefined&&r.worldCandidate!=='v1'||r.processing==='layout'&&(r.arcCandidate!==undefined||r.worldCandidate!==undefined)||
       r.expressionContract!==undefined&&(r.expressionContract!=='paragraph-expressions-v1'||r.source!=='reading'||r.processing!=='model')||r.expressionOnly!==undefined&&(r.expressionOnly!==true||r.source!=='reading'||r.processing!=='model') || r.processing !== undefined && !['model','layout'].includes(r.processing) ||r.delivery!==undefined&&(!isReadingDelivery(r.delivery)||r.processing==='layout')||

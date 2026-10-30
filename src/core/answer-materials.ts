@@ -11,8 +11,7 @@ export function answerScopeFor(question:string, explicit?:AnswerScope):AnswerSco
   return /全书|跨(?:章节|阶段|时间|时)|从(?:开头|最初|第一章).{0,20}到|(?:至今|到目前|到现在|读到这里).{0,8}(?:整体|回顾|梳理|总结)|(?:回顾|梳理|总结).{0,16}(?:一路|前后|各阶段|不同阶段|多条线索)/u.test(question)?'overview':'focused';
 }
 
-export const answerPreparationInstruction='本题需要跨阶段综合。先用prepare_answer列出本题需要的1至3方面，并选择已经给出的m文档或p原句；需要补充时给简短query。程序会实际取回相关旧稿及真实后继，并把材料按方面返回。已给材料足够时直接引用编号，不重复查找。完成这一步后自然回答：按材料区分已经知道的部分、人物当时的说法及仍未解决的部分；正文不展示取材表或内部编号。';
-export const answerPreparationPolicy='prepare_answer用于组织当前问题的材料：选择少量与本题有关的方面及真实m/p，按需补查旧认识。它只返回实际材料和取得情况，不判断事实真假；版本前后与revisionReason说明认识如何修订，不自动证明故事事件发生变化。完整愿望、顾虑和条件在与本题有关时共同采用；短问与感受题可直接自然回答。';
+export const answerPreparationPolicy='prepare_answer是可选的批量取材工具：可按当前问题选择相关方面及已给m/p，按需补查旧认识。材料足够时直接交流。它返回实际材料、版本关系和取得情况，不判断事实真假，也不规定表达结构。';
 export const prepareAnswerTool:ModelTool={
   name:'prepare_answer',
   description:'为本题选择1至3方面的实际依据；复用已给m/p，需要时按query取回相关完整文档及真实后继。返回材料后自然回答，不写长期记忆。',

@@ -1,4 +1,4 @@
-import { requireBookText } from './books.ts';
+import { bookTextSlice, requireBookText } from './books.ts';
 import { isEvidenceAllowed } from './context.ts';
 import { isNaturalReadingText } from './reading-output.ts';
 import type { Book, Evidence, Memory, ModelTool, Range } from './types.ts';
@@ -54,7 +54,7 @@ export function validateAnswerSupport(book: Book, passages: ReadonlyMap<string, 
     if (!passage) throw Error('对照来源未在本轮实际提供');
     const span = passage.evidence;
     if (!Number.isSafeInteger(span.start) || !Number.isSafeInteger(span.end) || span.start < 0 || span.end <= span.start ||
-        !isEvidenceAllowed(book, [span], extra) || typeof passage.text !== 'string' || !passage.text.trim() || passage.text.length > 200 || book.text.slice(span.start, span.end) !== passage.text) throw Error('对照来源的书籍版本、阅读许可或原字句已失效');
+        !isEvidenceAllowed(book, [span], extra) || typeof passage.text !== 'string' || !passage.text.trim() || passage.text.length > 200 || bookTextSlice(book, span.start, span.end) !== passage.text) throw Error('对照来源的书籍版本、阅读许可或原字句已失效');
     if (claim.quote !== undefined && (typeof claim.quote !== 'string' || !claim.quote.trim() || claim.quote.length > 200)) throw Error('对照引文须为连续原字句');
     const quote = claim.quote === undefined ? passage.text : claim.quote as string;
     const offset = passage.text.indexOf(quote);

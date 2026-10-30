@@ -1,4 +1,3 @@
-import {currentHabits} from './habits.ts';
 import {chatBelongsToPartner} from './discussion-recall.ts';
 import {isEvidenceAllowed} from './context.ts';
 import type {Book,Chat,ReadingReply,State} from './types.ts';
@@ -24,22 +23,13 @@ export function latestExpansionOffer(state:State,book:Book,sessionId:string):Cha
 
 export function acceptsExpansion(text:string):boolean{return /^(?:好(?:的|啊)?|可以|行|是的|展开(?:吧)?|继续(?:吧)?)[。！!\s]*$/u.test(text.trim());}
 
-export function replyStyle(state:State,source:'reading'|'conversation'|'closing',text:string,expanded:boolean,quiet:boolean):ReplyStyle{
-  if(expanded)return{targetChars:16000,visibleLimit:20000,expanded:true,quiet:false};
-  if(quiet)return{targetChars:0,visibleLimit:0,expanded:false,quiet:true};
-  if(source!=='conversation')return{targetChars:100,visibleLimit:180,expanded:false,quiet:false};
-  const brief=/(?:简短|简洁|一句话|一两句|不要太长)/u.test(text.trim().split('\n')[0]);
-  const preference=currentHabits(state).find(h=>h.key==='replyLength')?.value;
-  return brief||preference==='brief'?{targetChars:120,visibleLimit:240,expanded:false,quiet:false}:
-    preference==='expanded'?{targetChars:300,visibleLimit:500,expanded:false,quiet:false}:{targetChars:180,visibleLimit:360,expanded:false,quiet:false};
+export function replyStyle(_state:State,_source:'reading'|'conversation'|'closing',_text:string,expanded:boolean,quiet:boolean):ReplyStyle{
+  return{targetChars:quiet?0:20000,visibleLimit:quiet?0:20000,expanded,quiet};
 }
 
 export function presentReply(result:Pick<ReadingReply,'reply'|'wantsLong'>,style:ReplyStyle,pendingOffer=false):{text:string;offer:boolean;replaced:boolean}|undefined{
   if(style.quiet)return;
-  const text=result.reply.trim(),tooLong=text.length>style.visibleLimit;
-  if(!text&&!result.wantsLong)return;
-  if(style.expanded)return text?{text,offer:false,replaced:false}:undefined;
-  const offer=result.wantsLong||tooLong;
-  if(offer&&pendingOffer)return;
-  return{ text:tooLong||!text?expansionNotice:text,offer,replaced:tooLong||!text };
+  const text=result.reply.trim();
+  if(!text)return;
+  return{text,offer:!style.expanded&&!pendingOffer&&!!result.wantsLong,replaced:false};
 }

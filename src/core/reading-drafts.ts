@@ -1,29 +1,50 @@
+import {memoryReadableByPartner} from './book-document-ownership.ts';
 import { bookLength, id, mergeRanges, normalize, readingStart } from './books.ts';
 import {maintenanceTaskCommitted} from './maintenance-dispatch.ts';
 import { chatAllowsMemory,isEvidenceAllowed } from './context.ts';
-import {viewAllowed} from './published-views.ts';
+import {publishedViewChecker} from './published-views.ts';
 import {validateTaskMaterialRef} from './storage-records.ts';
-import {validateSceneOpportunity} from './scene-scheduling.ts';
-import {validateMaterialProjection,sceneRecordAllowed} from './material-projection.ts';
+import {validateSceneOpportunity,scenePreviewRanges} from './scene-scheduling.ts';
+import {validateMaterialProjection,sceneRecordAllowed,isNonOriginalMaintenanceTask} from './material-projection.ts';
 import { parseReadingReply } from './model.ts';
 import { publicWebUrl } from './web.ts';
 import {semanticNote} from './semantic-notes.ts';
 import {correctionRepairStamp,correctionRepairUsable} from './companion-correction-repair.ts';
 import {memoryContentIdentity,stampsEqual} from './memory-identity.ts';
 import {requireMemoryText} from './memory-bodies.ts';
+import {dependencyProjection,prepareDependencyProjection,inheritDependencyPreparation,linkDependencyProjectionOwners,DependencyPreparationRequired} from './dependency-nodes.ts';
 import type { Book, ReadingDraft, ReadingDraftMaterial, ReadingDraftRequest, ReadingReply, State, WebReference } from './types.ts';
 import {isReadingDelivery,isWorkspaceVersion} from './types.ts';
+import {resolveBookVersion} from './book-versions.ts';
+import {dependencyStampsEqual} from './dependency-chat-sources.ts';
+export {dependencyStampsEqual} from './dependency-chat-sources.ts';
 
 /** Exact semantic dependency state, compacting duplicate evidence ranges.
  * New unrelated messages and usage do not invalidate completed understanding. */
 export function dependencyStamp(state: State, material: ReadingDraftMaterial,result?:ReadingReply): string {
+  const projection=dependencyValue(state,material,result);
+  return JSON.stringify(material.dependencyStampVersion===3?dependencyProjection(state,material,projection):projection);
+}
+
+export async function prepareDependencyStamp(state:State,material:ReadingDraftMaterial,result?:ReadingReply):Promise<void>{
+  await prepareDependencyProjection(state,material,dependencyValue(state,material,result));
+}
+
+function dependencyValue(state: State, material: ReadingDraftMaterial,result?:ReadingReply) {
   const companion=material.readingStrategy==='companion';
-  return JSON.stringify({
+  return {
     ...(material.taskRole?{taskRole:material.taskRole}:{}),
+    ...(material.sceneOpportunity?.preview?{sceneOpportunity:material.sceneOpportunity}:{}),
+    ...(material.delegatedSources?.length?{delegatedSources:material.delegatedSources.map(source=>{
+      const child=state.agentSessions?.find(record=>record.id===source.agentSessionId);
+      return{...source,child:child?{bookId:child.bookId,version:child.version,partnerId:child.partnerId,taskKey:child.taskKey,invalidated:child.status==='invalidated',invalidation:child.invalidation,resultRef:child.delegation?.resultRef,operationKey:child.delegation?.operationKey,authority:child.delegation?.authority}:null,
+        dependencies:JSON.parse(dependencyStamp(state,{messages:[],refs:[],originalRanges:source.originalRanges,memoryIds:source.memoryIds,chatIds:source.chatIds,habitIds:[],passages:[],viewIds:source.viewIds,sourceStampVersion:2,readingStrategy:material.readingStrategy}))};
+    })}:{}),
     ...(material.sceneRecordIds?.length?{sceneRecords:material.sceneRecordIds.map(id=>state.readings?.find(r=>r.id===id))}:{}),
     ...(material.sceneCommentIds?.length?{sceneCommentIds:material.sceneCommentIds}:{}),
     ...(material.viewIds?.length?{views:material.viewIds.map(id=>state.publishedViews?.find(v=>v.id===id))}:{}),
     ...(material.maintenanceReviewRanges?.length?{maintenanceReviewRanges:material.maintenanceReviewRanges,maintenanceReviewMemoryIds:material.maintenanceReviewMemoryIds}:{}),
+    ...(material.maintenanceReviewBatch?{maintenanceReviewBatch:true,maintenanceReviewMemoryIds:material.maintenanceReviewMemoryIds}:{}),
     ...(material.maintenanceViewTargets?.length?{maintenanceViewTargets:material.maintenanceViewTargets}:{}),
     ...(material.sourceStampVersion===2?{sourceStampVersion:2}:{}),
     ...(material.correctionRepairId?{correctionRepair:correctionRepairStamp(state,material.correctionRepairId)}:{}),
@@ -48,29 +69,32 @@ export function dependencyStamp(state: State, material: ReadingDraftMaterial,res
       // already supplied immutable source. Correction and forgetting still do.
       const replacement=companion&&state.memories.find(n=>n.id===m?.replacedBy)?.revisionKind==='development'?undefined:m?.replacedBy;
       return m ? [m.id,m.bookId,m.partnerId,m.kind,material.sourceStampVersion===2?memoryContentIdentity(m):requireMemoryText(m),m.source,m.forgotten,replacement,m.invalidatedBy,m.reviewDisposition,m.answersPartOf,
-        m.readingStage,m.narrative,m.sourceEvidence,m.sourceQuote,mergeRanges(m.evidence),...(m.documentRevision?['document-revision',m.documentRevision]:[]),...(m.temporal||m.clue?['semantic-note',semanticNote(m)]:[]),...(m.backgroundOrigin?['background-origin']:[]),...(m.historicalOnly?['historical-only']:[]),
+        m.readingStage,m.narrative,m.sourceEvidence,m.sourceQuote,mergeRanges(m.evidence),...(m.documentRevision?['document-revision',m.documentRevision]:[]),...(m.mergePreviousIds?['merge-predecessors',m.mergePreviousIds]:[]),...(m.temporal||m.clue?['semantic-note',semanticNote(m)]:[]),...(m.backgroundOrigin?['background-origin']:[]),...(m.historicalOnly?['historical-only']:[]),
         ...(m.about||m.identityClaim||m.attribution||m.ruleLinks||m.worldChangeOf?[m.about,m.identityClaim,m.attribution,m.ruleLinks,m.worldChangeOf,m.entityBindings]:[]),...(m.arcProjection?[m.arcProjection,m.arcChangeOf]:[]),...(m.stageNarrative?[m.stageNarrative]:[]),...(m.stateProjection?[m.stateProjection,m.stateChangeOf]:[]),...(material.basisStampVersion===1&&['stage','state','arc'].includes(m.kind)?['structural-basis',m.basis??null]:[]),...(material.sourceStampVersion===2?['lineage',m.parents,m.chatIds,m.habitIds,m.basis,m.correctionOf,m.revisionKind,m.revisionReason,m.correctionRepairSources,m.webSources]:[])] : null;
     }),
     ...(material.historicalCommentIds?.length?{historicalCommentIds:material.historicalCommentIds}:{}),
     ...(material.expressionContract?{expressionContract:material.expressionContract}:{}),
     chats: material.chatIds.map(id => {
       const c=state.chats.find(c=>c.id===id);
-      return c ? [c.id,c.bookId,c.partnerId,c.sessionId,c.role,c.text,c.excluded,c.outdatedBy,c.replacedBy,c.futureGrant,mergeRanges(c.evidence),...(c.presentation==='paragraph'?['paragraph',c.anchor,c.formationRanges,c.formedThrough,...(c.replyTo||c.readerInteraction?['interaction',c.replyTo,c.paragraphCommentId,c.readerInteraction]:[])]:[])] : null;
+      return c ? [c.id,c.bookId,c.partnerId,c.sessionId,c.role,c.text,c.excluded,c.outdatedBy,c.replacedBy,c.futureGrant,mergeRanges(c.evidence),...(c.presentation==='paragraph'?['paragraph',c.anchor,c.formationRanges,c.formedThrough,...(c.replyTo?['interaction',c.replyTo,c.paragraphCommentId,undefined]:[])]:[])] : null;
     }),
     habits: material.habitIds.map(id => {
       const h=state.habits?.find(h=>h.id===id);
       return h ? [h.id,h.partnerId,h.key,h.value,h.forgotten,h.retiredBy,h.invalidatedBy] : null;
     }),
-  });
+  };
 }
 
-export function draftBook(book: Book, draft: Pick<ReadingDraft,'source'|'ranges'>): Book {
-  return draft.source==='background' ? {...book,known:[{start:readingStart(book),end:Math.max(...draft.ranges.map(r=>r.end))}]} : book;
+export function draftBook(book: Book, draft: Pick<ReadingDraft,'source'|'ranges'>&Partial<Pick<ReadingDraft,'input'|'sceneOpportunity'>>): Book {
+  if(draft.source==='background')return {...book,known:[{start:readingStart(book),end:Math.max(...draft.ranges.map(r=>r.end))}]};
+  const preview=scenePreviewRanges({taskRole:draft.input==='现场参与'?'scene':undefined,sceneOpportunity:draft.sceneOpportunity});
+  return preview.length?{...book,known:mergeRanges([...book.known,...preview])}:book;
 }
 
 export function createReadingDraft(state: State, book: Book, request: ReadingDraftRequest, result: ReadingReply, webSources: WebReference[], material: ReadingDraftMaterial, association: ReadingDraft['association']): ReadingDraft {
   const refs=mergeRanges(material.refs).map(r=>({...r,bookId:book.id,version:book.version}));
   const value=structuredClone({...material,readingStrategy:material.readingStrategy??'structured',stateWriteVersion:material.stateWriteVersion??1,refs,originalRanges:mergeRanges(material.originalRanges),messages:material.messages.filter(m=>m.role==='user')});
+  inheritDependencyPreparation(material,value);
   if(result.stageNarrative?.basis!==undefined||result.stateUpdates?.some(u=>u.basis!==undefined)||result.arcUpdates?.some(u=>u.basis!==undefined)||value.memoryIds.some(id=>state.memories.some(m=>m.id===id&&['stage','state','arc'].includes(m.kind)&&m.basis!==undefined)))value.basisStampVersion=1;
   return {id:id(),bookId:book.id,version:book.version,partnerId:state.partnerId,createdAt:Date.now(),
     source:request.source,...(request.sceneOpportunity?{sceneOpportunity:request.sceneOpportunity}:{}),ranges:mergeRanges(request.ranges),input:request.input,...(request.sceneCommentIds?.length?{sceneCommentIds:[...request.sceneCommentIds]}:{}),...(request.correctionRepairId?{correctionRepairId:request.correctionRepairId}:{}),...(request.maintenanceJobId?{maintenanceJobId:request.maintenanceJobId,maintenanceClaim:request.maintenanceClaim}:{}),result:structuredClone(result),webSources:structuredClone(webSources),material:value,
@@ -78,20 +102,27 @@ export function createReadingDraft(state: State, book: Book, request: ReadingDra
 }
 
 export function readingDraftUsable(state: State, draft: ReadingDraft): boolean {
+  if(state.partnerId!==draft.partnerId){const scoped={...state,partnerId:draft.partnerId};linkDependencyProjectionOwners(scoped,state);state=scoped;}
   if(!draft.material)return false;
   if(maintenanceTaskCommitted(state,draft))return false;
   if(draft.material.correctionRepairId&&!state.companionCorrectionRepairs?.some(p=>p.id===draft.material.correctionRepairId&&correctionRepairUsable(state,p)))return false;
-  const book=state.books.find(b=>b.id===draft.bookId&&b.version===draft.version);
+  const currentBook=state.books.find(b=>b.id===draft.bookId),book=currentBook&&resolveBookVersion(currentBook,draft.version);
   const completed=state.readings?.find(r=>r.bookId===draft.bookId&&r.version===draft.version&&r.partnerId===draft.partnerId&&r.source===draft.source&&(r.draftId===draft.id||r.supersededReceiptIds?.includes(draft.id)));
   const pendingScene=completed?.sceneJudgment&&draft.material.taskRole==='scene'&&state.chats.some(c=>c.publication?.scene?.usageId===draft.id&&['deferred','save-failed'].includes(c.publication.status));
   if(!book||!state.partners.some(p=>p.id===draft.partnerId)||completed&&!pendingScene)return false;
+  const nonOriginalMaintenance=!draft.ranges.length&&isNonOriginalMaintenanceTask({...state,partnerId:draft.partnerId},book,draft,draft.material);
+  if(!draft.ranges.length&&!nonOriginalMaintenance)return false;
   const scope=draftBook(book,draft);
   if(draft.material.sceneRecordIds?.some(id=>{const r=state.readings?.find(r=>r.id===id);return!r||!sceneRecordAllowed({...state,partnerId:draft.partnerId},scope,r);}))return false;
-  if(draft.material.viewIds?.some(id=>{const view=state.publishedViews?.find(v=>v.id===id);return!view||!viewAllowed(state,scope,view);}))return false;
-  if(!isEvidenceAllowed(scope,draft.material.refs)||!isEvidenceAllowed(scope,draft.ranges.map(r=>({...r,bookId:book.id,version:book.version}))))return false;
+  const viewReadable=publishedViewChecker(state,scope);
+  if(draft.material.viewIds?.some(id=>{const view=state.publishedViews?.find(v=>v.id===id);return!view||!viewReadable(view);}))return false;
+  if(!isEvidenceAllowed(scope,draft.material.refs)||!nonOriginalMaintenance&&!isEvidenceAllowed(scope,draft.ranges.map(r=>({...r,bookId:book.id,version:book.version}))))return false;
+  // Destructive guards do not depend on cache residency or hashing.
+  if(draft.material.memoryIds.some(id=>{const m=state.memories.find(m=>m.id===id);return !m||m.forgotten||!!m.invalidatedBy;})||draft.material.chatIds.some(id=>{const c=state.chats.find(c=>c.id===id);return !c||c.excluded||!!c.futureGrant;}))return false;
   const material=draft.material.partialMemoryIds?.length?{...draft.material,memoryIds:[...draft.material.memoryIds,...draft.material.partialMemoryIds]}:draft.material;
-  if(!stampsEqual(dependencyStamp(state,material,draft.result),draft.dependencyStamp))return false;
-  if([...draft.material.memoryIds,...(draft.material.partialMemoryIds??[])].some(id=>!state.memories.some(m=>m.id===id&&m.bookId===book.id&&m.partnerId===draft.partnerId&&!m.forgotten&&!m.invalidatedBy&&isEvidenceAllowed(scope,m.evidence)))||
+  try{if(!dependencyStampsEqual(state,material,dependencyStamp(state,material,draft.result),draft.dependencyStamp))return false;}
+  catch(error){if(error instanceof DependencyPreparationRequired&&error.changed)return false;throw error;}
+  if([...draft.material.memoryIds,...(draft.material.partialMemoryIds??[])].some(id=>!state.memories.some(m=>m.id===id&&m.bookId===book.id&&memoryReadableByPartner(state,m,draft.partnerId)&&!m.forgotten&&!m.invalidatedBy&&isEvidenceAllowed(scope,m.evidence)))||
     draft.material.chatIds.some(id=>!state.chats.some(c=>c.id===id&&c.bookId===book.id&&chatAllowsMemory(state,c)&&!c.excluded&&(!c.outdatedBy&&!c.replacedBy||draft.material.historicalCommentIds?.includes(id)&&c.presentation==='paragraph')&&!c.futureGrant&&isEvidenceAllowed(scope,c.evidence))))return false;
   const forgotten=state.forgotten.filter(f=>f.bookId===book.id);
   if(forgotten.length){const text=normalize(JSON.stringify(draft.result));if(forgotten.some(f=>text.includes(normalize(f.text))))return false;}
@@ -117,30 +148,32 @@ export function pruneReadingDrafts(state: State): boolean {
   return changed;
 }
 
-/** Persisted drafts are bounded data, never saved system instructions or model
+/** Persisted drafts are structured data, never saved system instructions or model
  * reasoning. Imported old drafts are subsequently reconciled with local edits. */
 export function validateReadingDrafts(state: State, checkOriginal=true): void {
   if(state.readingDrafts===undefined)return;
   if(!Array.isArray(state.readingDrafts)||state.readingDrafts.length>1500)throw Error('阅读草稿记录无效');
   const seen=new Set<string>();
-  const ids=(v:unknown):v is string[]=>Array.isArray(v)&&v.length<=256&&v.every(x=>typeof x==='string'&&x.length>0&&x.length<=128);
+  const ids=(v:unknown):v is string[]=>Array.isArray(v)&&v.every(x=>typeof x==='string'&&x.length>0&&x.length<=128);
   for(const d of state.readingDrafts){
-    const b=state.books.find(b=>b.id===d?.bookId&&b.version===d.version),c=d?.material;
+    const currentBook=state.books.find(b=>b.id===d?.bookId),b=currentBook&&resolveBookVersion(currentBook,d.version),c=d?.material;
     if(!c&&d.materialRef){validateTaskMaterialRef(d.materialRef);if(!b||!d.id||seen.has(d.id)||!state.partners.some(p=>p.id===d.partnerId)||!['preparation','reading','background'].includes(d.source)||!Array.isArray(d.ranges)||!d.result||typeof d.input!=='string'||typeof d.dependencyStamp!=='string')throw Error('冷阅读草稿身份无效');seen.add(d.id);continue;}
     if(d.sceneOpportunity){if(!b||c?.taskRole!=='scene'||JSON.stringify(d.sceneOpportunity)!==JSON.stringify(c.sceneOpportunity))throw Error('现场草稿机会与原材料身份不符');validateSceneOpportunity(b,d.sceneOpportunity);}
     if(d.result?.sceneInsight){const i=d.result.sceneInsight;if(typeof i.text!=='string'||!i.text.trim()||i.text.length>1600||!Array.isArray(i.sourceIds)||!i.sourceIds.length||i.sourceIds.some(id=>!c?.passages?.some(([key])=>key===id)))throw Error('现场草稿成果与实际原文出处无效');}
     if(b&&c)validateMaterialProjection({...state,partnerId:d.partnerId},b,c);
     if(d.sceneCommentIds!==undefined&&(!Array.isArray(d.sceneCommentIds)||!d.sceneCommentIds.length||new Set(d.sceneCommentIds).size!==d.sceneCommentIds.length||d.sceneCommentIds.some(id=>typeof id!=='string'||!id)||c?.taskRole!=='scene'||JSON.stringify(d.sceneCommentIds)!==JSON.stringify(c.sceneCommentIds)||d.sceneCommentIds.some(id=>!c.chatIds.includes(id))))throw Error('现场草稿实际评论触发身份无效');
+    if(c?.maintenanceReviewBatch!==undefined&&(c.maintenanceReviewBatch!==true||c.taskRole!=='maintenance'||!Array.isArray(c.maintenanceReviewMemoryIds)||new Set(c.maintenanceReviewMemoryIds).size!==c.maintenanceReviewMemoryIds.length||c.maintenanceReviewMemoryIds.some(id=>typeof id!=='string'||!id)))throw Error('维护来源分批草稿缺少准确版本集合');
     if(d.maintenanceJobId!==undefined&&(typeof d.maintenanceJobId!=='string'||!d.maintenanceJobId||typeof d.maintenanceClaim!=='string'||!/^[a-f0-9]{64}$/.test(d.maintenanceClaim)||c?.taskRole!=='maintenance'||c.maintenanceJobId!==d.maintenanceJobId)||d.maintenanceClaim!==undefined&&!d.maintenanceJobId)throw Error('维护草稿的原任务或claim身份无效');
     if(c?.correctionRepairId!==undefined&&(typeof c.correctionRepairId!=='string'||c.correctionRepairId!==d.correctionRepairId||c.readingStrategy!=='companion'))throw Error('更正恢复草稿身份无效');
     const ranges=(v:unknown):boolean=>Array.isArray(v)&&v.length<=5000&&v.every(r=>r&&Number.isSafeInteger(r.start)&&Number.isSafeInteger(r.end)&&r.start>=0&&r.end>r.start&&r.end<=bookLength(b!));
+    const nonOriginalMaintenance=!!b&&!!c&&isNonOriginalMaintenanceTask({...state,partnerId:d.partnerId},b,d,c);
     if(!d||!b||typeof d.id!=='string'||!d.id||seen.has(d.id)||!state.partners.some(p=>p.id===d.partnerId)||!['preparation','reading','background'].includes(d.source)||
       !Number.isFinite(d.createdAt)||d.createdAt<0||typeof d.input!=='string'||d.input.length>30000||!['pending','ready'].includes(d.association)||!c||d.delivery!==undefined&&!isReadingDelivery(d.delivery)||c.outputProtocol!==undefined&&!['reading-text-v1','reading-documents-v1'].includes(c.outputProtocol)||c.outputProtocol==='reading-documents-v1'&&c.readingStrategy!=='companion'||
       c.outputReactionAllowed!==undefined&&(c.outputReactionAllowed!==true||!['reading-text-v1','reading-documents-v1'].includes(c.outputProtocol??'')||d.source!=='reading')||
-      !Array.isArray(d.ranges)||!d.ranges.length||d.ranges.length>(c.readingStrategy==='full-original'?5000:16)||!ranges(d.ranges)||!ranges(c.refs)||!c.refs.length||!ranges(c.originalRanges)||
+      !Array.isArray(d.ranges)||!d.ranges.length&&!nonOriginalMaintenance||d.ranges.length>(c.readingStrategy==='full-original'?5000:16)||!ranges(d.ranges)||!ranges(c.refs)||!c.refs.length||!ranges(c.originalRanges)||
       c.historicalSourceIds!==undefined&&(!ids(c.historicalSourceIds)||c.historicalSourceIds.some(id=>!c.memoryIds.includes(id)))||c.refs.some(r=>r.bookId!==b.id||r.version!==b.version)||!ids(c.memoryIds)||!ids(c.partialMemoryIds??[])||!ids(c.chatIds)||!ids(c.habitIds)||
-      typeof d.dependencyStamp!=='string'||!Array.isArray(c.messages)||c.messages.length>64||c.messages.some(m=>m?.role!=='user'||typeof m.content!=='string')||
-      !Array.isArray(c.passages)||c.passages.length>256||!Array.isArray(d.webSources)||d.webSources.length>10||JSON.stringify(d).length>2000000)throw Error('阅读草稿的范围或来源无效');
+      typeof d.dependencyStamp!=='string'||!Array.isArray(c.messages)||c.messages.some(m=>m?.role!=='user'||typeof m.content!=='string')||
+      !Array.isArray(c.passages)||!Array.isArray(d.webSources)||d.webSources.length>10)throw Error('阅读草稿的范围或来源无效');
     if(c.expressionContract!==undefined&&(c.expressionContract!=='paragraph-expressions-v1'||d.source!=='reading'))throw Error('阅读草稿表达合同无效');
     if(c.historicalCommentIds!==undefined&&(!ids(c.historicalCommentIds)||c.historicalCommentIds.some(id=>!c.chatIds.includes(id)||!state.chats.some(chat=>chat.id===id&&chat.presentation==='paragraph'))))throw Error('阅读形成材料的历史段评引用无效');
     if(d.supersededReceiptIds!==undefined&&(!ids(d.supersededReceiptIds)||d.supersededReceiptIds.length>12||new Set(d.supersededReceiptIds).size!==d.supersededReceiptIds.length||d.supersededReceiptIds.includes(d.id)))throw Error('阅读草稿原答继起编号无效');

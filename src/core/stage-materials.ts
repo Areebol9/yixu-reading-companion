@@ -1,3 +1,4 @@
+import {bookVersionAllowsRanges} from './book-versions.ts';
 import {requireMemoryText} from './memory-bodies.ts';
 import { covers, mergeRanges } from './books.ts';
 import { evidence, isBackgroundMemory, isEvidenceAllowed, memorySources, readableParts } from './context.ts';
@@ -149,7 +150,7 @@ export function selectStageMaterials(state: State, book: Book, provided: Range[]
   const frequency = new Map<string, number>();
   for (const item of indexed) for (const word of item.words) if (words.has(word)) frequency.set(word, (frequency.get(word) ?? 0) + 1);
   const boundary = suppliedFocus.length ? Math.min(...suppliedFocus.map(r => r.start)) : undefined;
-  const batches = (state.readings ?? []).filter(r => r.bookId === book.id && r.version === book.version && r.partnerId === state.partnerId &&
+  const batches = (state.readings ?? []).filter(r => r.bookId === book.id && bookVersionAllowsRanges(book,r.version,r.ranges) && r.partnerId === state.partnerId &&
     (r.source === 'background') === (query.source === 'background') && r.processing !== 'layout' && r.ranges.length &&
     boundary !== undefined && r.ranges.every(p => p.end <= boundary) && isEvidenceAllowed(book, r.ranges.map(p => evidence(book, p)), options.extra ?? []));
   const latestEnd = Math.max(-1, ...batches.map(r => Math.max(...r.ranges.map(p => p.end))));

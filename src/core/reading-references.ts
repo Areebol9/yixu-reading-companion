@@ -1,4 +1,5 @@
-import type { MemoryBasis, ModelMessage, ReadingReply,StatePartOperation,ArcUpdate,WorldNote,SemanticNote,SemanticNoteProposal } from './types.ts';
+import {mapDocumentOrganization} from './document-organization.ts';
+import type { MemoryBasis, ModelMessage, ReadingReply,StatePartOperation,ArcUpdate,WorldNote,SemanticNote,SemanticNoteProposal,PartnerPersonaSource } from './types.ts';
 import {parseStructuralBasis} from './basis.ts';
 import type {StructureRelationIndex} from './structure-relations.ts';
 import {documentCapacity} from './types.ts';
@@ -11,6 +12,9 @@ export class ReadingReferences {
   private forward: Record<Kind, Map<string, string>> = { memory: new Map(), chat: new Map(), habit: new Map(),part:new Map(),entity:new Map() };
   private reverse: Record<Kind, Map<string, string>> = { memory: new Map(), chat: new Map(), habit: new Map(),part:new Map(),entity:new Map() };
   memoryLabel(id:string):string{return this.forward.memory.get(id)??'未提供的编号';}
+  /** A saved proposal may be referenced by the rest of its original task.
+   * Registering its ID does not fabricate a model input/read receipt. */
+  savedMemory(id:string):string{return this.expose('memory',id);}
   entityLabel(id:string):string{return this.forward.entity.get(id)??'未提供的编号';}
   snapshot():Record<Kind,[string,string][]>{return Object.fromEntries(Object.entries(this.forward).map(([kind,map])=>[kind,[...map]])) as Record<Kind,[string,string][]>;}
   restore(snapshot:Record<Kind,[string,string][]>):void{
@@ -33,6 +37,8 @@ export class ReadingReferences {
     const node=(n:StructureRelationIndex['items'][number]['from'])=>({...n,id:this.expose(n.kind,n.id)});
     return{...index,items:index.items.map(e=>({...e,ownerId:this.expose('memory',e.ownerId),from:node(e.from),to:node(e.to),...(e.partId?{partId:this.expose('part',e.partId)}:{})})),nodes:index.nodes.map(n=>({...n,id:this.expose('memory',n.id)})),entityIds:index.entityIds.map(id=>this.expose('entity',id)),...(index.missingBodyIds?{missingBodyIds:index.missingBodyIds.map(id=>this.expose('memory',id))}:{})};
   }
+  private subject(value:any){return value?{...value,...(value.currentPrimary?{currentPrimary:{...value.currentPrimary,id:this.expose('memory',value.currentPrimary.id)}}:{}),...(value.currentPrimaryConflictIds?{currentPrimaryConflictIds:value.currentPrimaryConflictIds.map((id:string)=>this.expose('memory',id))}:{})}:value;}
+  private organization(value:import('./document-organization.ts').DocumentOrganization|undefined,decode:boolean){return mapDocumentOrganization(value,id=>{if(/^t[1-9]\d*$/.test(id))return id;const mapped=decode?this.resolve('memory',id):this.expose('memory',id);if(!mapped)throw Error('文档关联编号未提供，请先取得完整正文');return mapped;});}
   private basis(value: MemoryBasis | undefined, decode: boolean, structural=false): MemoryBasis | undefined {
     if(structural)value=parseStructuralBasis(value);
     if (!value) return undefined;
@@ -48,7 +54,7 @@ export class ReadingReferences {
   }
   private world(value:WorldNote,decode:boolean):WorldNote{
     const copy=structuredClone(value),entity=(key:string)=>{if(/^new[1-8]$/.test(key))return key;const resolved=decode?this.resolve('entity',key):this.expose('entity',key);if(!resolved)throw Error('主体编号未在本轮合法提供，不能猜身份');return resolved;};
-    const memory=(key:string,proposal=false)=>{if(proposal&&/^t(?:[1-9]|1[0-6])$/.test(key))return key;const resolved=decode?this.resolve('memory',key):this.expose('memory',key);if(!resolved)throw Error('身份或归属的具体版本未提供，请先取得完整来源');return resolved;};
+    const memory=(key:string,proposal=false)=>{if(proposal&&/^t[1-9][0-9]*$/.test(key))return key;const resolved=decode?this.resolve('memory',key):this.expose('memory',key);if(!resolved)throw Error('身份或归属的具体版本未提供，请先取得完整来源');return resolved;};
     if(copy.about)copy.about=copy.about.map(x=>({...x,entityId:entity(x.entityId)}));
     if(copy.identityClaim){const c=copy.identityClaim;c.entityId=entity(c.entityId);if(c.targetId)c.targetId=entity(c.targetId);if(c.speakerId)c.speakerId=entity(c.speakerId);if(c.changeOf)c.changeOf=memory(c.changeOf);}
     if(copy.attribution){copy.attribution.holderId=entity(copy.attribution.holderId);if(copy.attribution.speakerId)copy.attribution.speakerId=entity(copy.attribution.speakerId);if(copy.attribution.contentRef)copy.attribution.contentRef.memoryId=memory(copy.attribution.contentRef.memoryId,true);}
@@ -58,7 +64,7 @@ export class ReadingReferences {
     return copy;
   }
   private semantic<T extends SemanticNote|SemanticNoteProposal>(value:T,decode:boolean):T{
-    const copy=structuredClone(value),memory=(key:string)=>{if(decode&&/^t(?:[1-9]|1[0-6])$/.test(key))return key;const resolved=decode?this.resolve('memory',key):this.expose('memory',key);if(!resolved)throw Error('时间或线索具体版本尚未完整提供，请先取回正文');return resolved;};
+    const copy=structuredClone(value),memory=(key:string)=>{if(/^t[1-9][0-9]*$/.test(key))return key;const resolved=decode?this.resolve('memory',key):this.expose('memory',key);if(!resolved)throw Error('时间或线索具体版本尚未完整提供，请先取回正文');return resolved;};
     for(const axis of [copy.temporal?.occurrence,copy.temporal?.acquisition])for(const r of axis?.relations??[])r.targetId=memory(r.targetId);
     if(copy.clue)for(const r of [copy.clue.setupRef,...(copy.clue.payoffRefs??[])])r.memoryId=memory(r.memoryId);
     return copy;
@@ -76,16 +82,20 @@ export class ReadingReferences {
       for(const via of (item as any).knowledgeContextVia??[])this.expose('memory',via.memoryId);
       if((item as any).directSuccessorId)this.expose('memory',(item as any).directSuccessorId);
       for(const id of (item as any).developmentChainIds??[])this.expose('memory',id);
+      for(const id of (item as any).documentSuccessors??[])this.expose('memory',id);
       if((item as any).documentRevision?.previousId)this.expose('memory',(item as any).documentRevision.previousId);
       if(item.stateChangeOf)this.expose('memory',item.stateChangeOf);
       for(const part of item.stateProjection?.parts??[]){this.expose('part',part.id);if(part.memoryRef)this.expose('memory',part.memoryRef.memoryId);}
     }
     for(const raw of items){const item=raw as any;if(item.arcId)this.expose('memory',item.arcId);if(item.arcChangeOf)this.expose('memory',item.arcChangeOf);if(item.arcProjection){this.expose('memory',item.arcProjection.arcId);for(const part of item.arcProjection.parts??[]){this.expose('part',part.id);if(part.memoryRef)this.expose('memory',part.memoryRef.memoryId);if(part.impact)for(const key of ['sourceArcId','sourceVersionId','targetArcId','targetVersionId'])this.expose('memory',part.impact[key]);}}}
     return items.map(raw=>{const item:any=this.semantic(this.world({...raw} as any,false) as any,false);if(item.partnerFormation?.basis)item.partnerFormation={...item.partnerFormation,basis:this.basis(item.partnerFormation.basis,false)};if(item.arcId)item.arcId=this.forward.memory.get(item.arcId);if(item.arcChangeOf)item.arcChangeOf=this.forward.memory.get(item.arcChangeOf);if(item.arcProjection)item.arcProjection={...item.arcProjection,arcId:this.forward.memory.get(item.arcProjection.arcId),parts:item.arcProjection.parts.map((part:any)=>({...part,id:this.forward.part.get(part.id),...(part.memoryRef?{memoryRef:{...part.memoryRef,memoryId:this.forward.memory.get(part.memoryRef.memoryId)}}:{}),...(part.impact?{impact:Object.fromEntries(Object.entries(part.impact).map(([key,value])=>[key,['sourceArcId','sourceVersionId','targetArcId','targetVersionId'].includes(key)?this.forward.memory.get(value as string):value]))}:{})}))};return ({ ...item, id:this.forward.memory.get(item.id)!,
+      ...(item.organization?{organization:this.organization(item.organization,false)}:{}),...(item.subject?{subject:this.subject(item.subject)}:{}),
+      ...(item.matchedHistoryIds?{matchedHistoryIds:item.matchedHistoryIds.map((id:string)=>this.expose('memory',id))}:{}),
       ...(item.laterDevelopmentIds?{laterDevelopmentIds:item.laterDevelopmentIds.map((id:string)=>this.forward.memory.get(id))}:{}),
       ...(item.knowledgeContextVia?{knowledgeContextVia:item.knowledgeContextVia.map((via:any)=>({...via,memoryId:this.forward.memory.get(via.memoryId)}))}:{}),
       ...(item.directSuccessorId?{directSuccessorId:this.forward.memory.get(item.directSuccessorId)}:{}),
       ...(item.developmentChainIds?{developmentChainIds:item.developmentChainIds.map((id:string)=>this.forward.memory.get(id))}:{}),
+      ...(item.documentSuccessors?{documentSuccessors:item.documentSuccessors.map((id:string)=>this.forward.memory.get(id))}:{}),
       ...(item.documentRevision?{documentRevision:{...item.documentRevision,previousId:this.forward.memory.get(item.documentRevision.previousId)}}:{}),
       ...(typeof item.text==='string'&&item.kind==='opinion'?{capacity:documentCapacity(item.text.length)}:{}),
       ...(item.answersPartOf ? { answersPartOf:this.forward.memory.get(item.answersPartOf) } : {}),
@@ -97,7 +107,7 @@ export class ReadingReferences {
     const mapped={...operation};
     for(const [field,kind]of [['partId','part'],['memoryId','memory']]as const){
       const raw=operation[field];if(!raw)continue;
-      if(field==='memoryId'&&/^t(?:[1-9]|1[0-6])$/.test(raw))continue;
+      if(field==='memoryId'&&/^t[1-9][0-9]*$/.test(raw))continue;
       const id=decode?this.resolve(kind,raw):this.forward[kind].get(raw)??raw;
       if(!id)throw Error(field==='partId'?'状态部件编号未在本轮完整基态中提供，请先取得完整状态与parts':'状态来源编号未在本轮提供，请先取得完整story或question');
       mapped[field]=id;
@@ -110,8 +120,9 @@ export class ReadingReferences {
   }
   private workspace(value:NonNullable<ReadingReply['workspace']>,decode:boolean,errors?:string[]):NonNullable<ReadingReply['workspace']>{
     const reference=(id:string,field:'understanding'|'focus'|'working')=>{
-      if(/^t(?:[1-9]|1[0-6])$/.test(id))return id;
+      if(/^t[1-9][0-9]*$/.test(id))return id;
       const resolved=decode?this.resolve('memory',id):this.forward.memory.get(id);
+      if(!resolved&&decode&&field!=='understanding')return id;
       if(!resolved&&errors){errors.push(`workspace.${field}：引用${id}未在本轮提供`);return id;}
       if(!resolved)throw Error(decode?`工作台${field}须引用本轮已完整展开的mN或本次tN；tN为本次documents第N篇，完整理解正文写入documents.text，目录只用于回查`:'工作台认识编号未在本轮提供，请先取得完整认识；目录只用于回查');
       // Mapping supplies identity only. The publication plan checks full-body
@@ -120,12 +131,25 @@ export class ReadingReferences {
     };
     return{...(value.understanding!==undefined?{understanding:reference(value.understanding,'understanding')}:{}),...(value.focus!==undefined?{focus:value.focus.map(id=>reference(id,'focus'))}:{}),...(value.working!==undefined?{working:value.working.map(id=>reference(id,'working'))}:{})};
   }
+  private partnerMaintenance(reply:ReadingReply,decode:boolean):Pick<ReadingReply,'partnerMaintenance'|'partnerMaintenanceIssue'>{
+    if(!reply.partnerMaintenance)return{};
+    const proposal=reply.partnerMaintenance;
+    try{
+      const sources=(items:PartnerPersonaSource[]):PartnerPersonaSource[]=>items.map(source=>{
+        if(source.kind==='theme'||source.kind==='memory'&&/^t[1-9][0-9]*$/.test(source.id))return{...source};
+        const id=decode?this.resolve(source.kind,source.id):this.forward[source.kind].get(source.id)??source.id;
+        if(!id)throw Error(`伙伴修订来源${source.id}未在本任务实际提供`);
+        return{...source,id};
+      });
+      return{partnerMaintenance:{...(proposal.persona?{persona:{...proposal.persona,sources:sources(proposal.persona.sources)}}:{}),...(proposal.themes?{themes:proposal.themes.map(theme=>({...theme,sources:sources(theme.sources)}))}:{}),...(proposal.resolves?{resolves:[...proposal.resolves]}:{})}};
+    }catch(error){return{partnerMaintenance:undefined,partnerMaintenanceIssue:{reason:(error as Error).message,proposal:structuredClone(proposal)}};}
+  }
   decode(reply: ReadingReply,errors?:string[]): ReadingReply {
     const chatId = reply.history?.chatId ? this.resolve('chat', reply.history.chatId) : undefined;
     if (reply.history?.chatId && !chatId) throw new Error('交流编号未在本轮提供，请先检索真实交流');
     const entityIds=reply.recall?.entityIds?.map(id=>{const found=this.resolve('entity',id);if(!found)throw Error('主体编号未在本轮提供');return found;});
     const memoryIds=reply.recall?.ids?.map(id=>{const resolved=this.resolve('memory',id);if(!resolved)throw new Error('记忆编号未在本轮提供，请使用目录编号或关键词检索');return resolved;});
-    return { ...reply,...(reply.workspace?{workspace:this.workspace(reply.workspace,true,errors)}:{}),...(reply.stageNarrative?.basis!==undefined?{stageNarrative:{...reply.stageNarrative,basis:this.basis(reply.stageNarrative.basis,true,true)}}:{}), ...(reply.arcUpdates?{arcUpdates:reply.arcUpdates.map(u=>this.arcUpdate(u,true))}:{}), replyBasis: this.basis(reply.replyBasis, true),
+    return { ...reply,...this.partnerMaintenance(reply,true),...(reply.workspace?{workspace:this.workspace(reply.workspace,true,errors)}:{}),...(reply.stageNarrative?.basis!==undefined?{stageNarrative:{...reply.stageNarrative,basis:this.basis(reply.stageNarrative.basis,true,true)}}:{}), ...(reply.arcUpdates?{arcUpdates:reply.arcUpdates.map(u=>this.arcUpdate(u,true))}:{}), replyBasis: this.basis(reply.replyBasis, true),
       ...(reply.stateUpdates?{stateUpdates:reply.stateUpdates.map(update=>{
         const target=update.stateChangeOf?this.resolve('memory',update.stateChangeOf):undefined;
         if(update.stateChangeOf&&!target)throw new Error('状态更新编号未在本轮提供，请先取得完整当前状态');
@@ -133,21 +157,23 @@ export class ReadingReferences {
       })}:{}),
       ...((memoryIds||entityIds)?{recall:{...reply.recall,...(memoryIds?{ids:memoryIds}:{}),...(entityIds?{entityIds}: {})}}:{}),
       ...(chatId ? { history: { ...reply.history, chatId } } : {}),
-      views:reply.views?.map(v=>({...v,sourceMemoryIds:v.sourceMemoryIds.map(id=>/^t[1-9]\d*$/.test(id)?id:this.resolve('memory',id)??id),chatIds:v.chatIds?.map(id=>this.resolve('chat',id)??id)})),
+      views:reply.views?.map(v=>({...v,sourceMemoryIds:v.sourceMemoryIds.map(id=>/^t[1-9]\d*$/.test(id)?id:this.resolve('memory',id)??id),reviewedMemoryIds:v.reviewedMemoryIds?.map(id=>/^t[1-9]\d*$/.test(id)?id:this.resolve('memory',id)??id),dropSourceMemoryIds:v.dropSourceMemoryIds?.map(id=>this.resolve('memory',id)??id),chatIds:v.chatIds?.map(id=>this.resolve('chat',id)??id)})),
       thoughts: reply.thoughts.map(thought => {
         const updates = thought.updates ? this.resolve('memory', thought.updates) : undefined;
         if(thought.updates&&!updates){if(errors)errors.push(`documents.updates：引用${thought.updates}未在本轮提供`);else throw new Error('理解更新编号未在本轮提供，请使用已取得记忆的编号');}
+        const mergePreviousIds=thought.mergePreviousIds?.map(id=>{const resolved=this.resolve('memory',id);if(!resolved)throw Error('归并前驱尚未在本轮提供：'+id);return resolved;});
         const answersPartOf = thought.answersPartOf ? this.resolve('memory',thought.answersPartOf) : undefined;
         if (thought.answersPartOf && !answersPartOf) throw new Error('部分答案关联的疑问尚未提供，请先取得原疑问');
-        return { ...thought,...this.semantic(this.world(thought,true) as typeof thought,true),basis: this.basis(thought.basis, true,thought.documentOperation!==undefined), ...(updates ? { updates } : {}), ...(answersPartOf ? { answersPartOf } : {}) };
+        return { ...this.semantic(this.world(thought,true) as typeof thought,true),...(thought.organization?{organization:this.organization(thought.organization,true)}:{}),basis: this.basis(thought.basis, true,thought.documentOperation!==undefined), ...(updates ? { updates } : {}), ...(mergePreviousIds?{mergePreviousIds}:{}),...(thought.replacementIds?{replacementIds:thought.replacementIds.map(id=>/^t[1-9]\d*$/.test(id)?id:this.resolve('memory',id)??(()=>{throw Error('承接文档编号未提供：'+id);})())}:{}), ...(answersPartOf ? { answersPartOf } : {}) };
       }),
       reinforce: reply.reinforce?.flatMap(id => { const target = this.resolve('memory', id); return target ? [target] : []; })
     };
   }
   private draft(reply: ReadingReply): ReadingReply {
-    return { ...reply,...(reply.workspace?{workspace:this.workspace(reply.workspace,false)}:{}),...(reply.stageNarrative?.basis!==undefined?{stageNarrative:{...reply.stageNarrative,basis:this.basis(reply.stageNarrative.basis,false,true)}}:{}), ...(reply.arcUpdates?{arcUpdates:reply.arcUpdates.map(u=>this.arcUpdate(u,false))}:{}), replyBasis: this.basis(reply.replyBasis, false),
+    return { ...reply,...this.partnerMaintenance(reply,false),...(reply.workspace?{workspace:this.workspace(reply.workspace,false)}:{}),...(reply.stageNarrative?.basis!==undefined?{stageNarrative:{...reply.stageNarrative,basis:this.basis(reply.stageNarrative.basis,false,true)}}:{}), ...(reply.arcUpdates?{arcUpdates:reply.arcUpdates.map(u=>this.arcUpdate(u,false))}:{}), replyBasis: this.basis(reply.replyBasis, false),
       ...(reply.stateUpdates?{stateUpdates:reply.stateUpdates.map(update=>({...update,...(update.basis!==undefined?{basis:this.basis(update.basis,false,true)}:{}),...(update.stateChangeOf?{stateChangeOf:this.forward.memory.get(update.stateChangeOf)??update.stateChangeOf}:{}),...(update.operations?{operations:update.operations.map(op=>this.stateOperation(op,false))}:{})}))}:{}),
-      thoughts: reply.thoughts.map(t => ({ ...t,...this.world(t,false), basis: this.basis(t.basis, false), ...(t.updates ? { updates: this.forward.memory.get(t.updates) ?? t.updates } : {}), ...(t.answersPartOf ? { answersPartOf:this.forward.memory.get(t.answersPartOf) ?? t.answersPartOf } : {}) })),
+      views:reply.views?.map(v=>({...v,sourceMemoryIds:v.sourceMemoryIds.map(id=>this.forward.memory.get(id)??id),reviewedMemoryIds:v.reviewedMemoryIds?.map(id=>this.forward.memory.get(id)??id),dropSourceMemoryIds:v.dropSourceMemoryIds?.map(id=>this.forward.memory.get(id)??id),chatIds:v.chatIds?.map(id=>this.forward.chat.get(id)??id)})),
+      thoughts: reply.thoughts.map(t => ({ ...this.semantic(this.world(t,false) as typeof t,false),...(t.organization?{organization:this.organization(t.organization,false)}:{}), basis: this.basis(t.basis, false), ...(t.updates ? { updates: this.forward.memory.get(t.updates) ?? t.updates } : {}), ...(t.mergePreviousIds?{mergePreviousIds:t.mergePreviousIds.map(id=>this.forward.memory.get(id)??id)}:{}),...(t.replacementIds?{replacementIds:t.replacementIds.map(id=>this.forward.memory.get(id)??id)}:{}), ...(t.answersPartOf ? { answersPartOf:this.forward.memory.get(t.answersPartOf) ?? t.answersPartOf } : {}) })),
       reinforce: reply.reinforce?.map(id => this.forward.memory.get(id) ?? id)
     };
   }
@@ -176,7 +202,7 @@ export class ReadingReferences {
         if(material.remaining)material.remaining=this.memoryItems(material.remaining);
         if(material.working)material.working=this.memoryItems(material.working);
         if(material.understanding)material.understanding=this.memoryItems([material.understanding])[0];
-        if(Array.isArray(material.focus))material.focus=material.focus.map((item:{id:string})=>({...item,id:this.expose('memory',item.id)}));
+        if(Array.isArray(material.focus))material.focus=this.memoryItems(material.focus);
         if(w)material.workspace={...w,...(w.understandingId?{understandingId:this.expose('memory',w.understandingId)}:{}),focusIds:w.focusIds.map((id:string)=>this.expose('memory',id)),...(w.workingIds?{workingIds:w.workingIds.map((id:string)=>this.expose('memory',id))}:{}),...(w.lastChatId?{lastChatId:this.expose('chat',w.lastChatId)}:{})};
       }
       if(data.analysisRelations)data.analysisRelations=this.relations(data.analysisRelations);
@@ -203,10 +229,10 @@ export class ReadingReferences {
       for(const key of ['conversation','newConversation'])if(Array.isArray(data[key])){
         const supplied=new Set<string>(data[key].map((c:{id:string})=>c.id));
         for(const id of supplied)this.expose('chat',id);
-        data[key]=data[key].map((c:{id:string;replyTo?:string;paragraphCommentId?:string;sharedChatId?:string})=>{const item={...c,id:this.expose('chat',c.id)};for(const pointer of ['replyTo','paragraphCommentId','sharedChatId'] as const){const id=c[pointer];if(id&&supplied.has(id))item[pointer]=this.expose('chat',id);}return item;});
+        data[key]=data[key].map((c:{id:string;replyTo?:string;paragraphCommentId?:string;sharedChatId?:string;bodyRefId?:string})=>{const item={...c,id:this.expose('chat',c.id)};for(const pointer of ['replyTo','paragraphCommentId','sharedChatId','bodyRefId'] as const){const id=c[pointer];if(id&&supplied.has(id))item[pointer]=this.expose('chat',id);}return item;});
       }
       if(Array.isArray(data.reviewSources))data.reviewSources=data.reviewSources.map((source:any)=>({...source,memoryIds:source.memoryIds.map((id:string)=>this.expose('memory',id))}));
-      if(Array.isArray(data.views))data.views=data.views.map((view:any)=>({...view,...(Array.isArray(view.adoptedMemoryIds)?{adoptedMemoryIds:view.adoptedMemoryIds.map((id:string)=>this.expose('memory',id))}:{})}));
+      if(Array.isArray(data.views))data.views=data.views.map((view:any)=>({...view,...(Array.isArray(view.reviewedMemoryIds)?{reviewedMemoryIds:view.reviewedMemoryIds.map((id:string)=>this.expose('memory',id))}:{}),...(Array.isArray(view.adoptedMemoryIds)?{adoptedMemoryIds:view.adoptedMemoryIds.map((id:string)=>this.expose('memory',id))}:{})}));
       if(Array.isArray(data.viewChecks))data.viewChecks=data.viewChecks.map((check:any)=>({...check,versions:check.versions.map((version:any)=>{const [previous,current]=this.memoryItems([version.previous,version.current]);return{previous,current};})}));
       for (const key of ['commonHabits', 'habitUpdate']) if (Array.isArray(data[key])) data[key] = data[key].map((h: { id: string }) => ({ ...h, id: this.expose('habit', h.id) }));
       if (data.userChatId) data.userChatId = this.expose('chat', data.userChatId);

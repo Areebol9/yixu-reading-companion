@@ -4,6 +4,7 @@ import {workspaceFor} from './companion-workspace.ts';
 import {legacyMemoryRecord,memoryContentIdentity,memorySourceRecord,stampsEqual} from './memory-identity.ts';
 import {requireMemoryText} from './memory-bodies.ts';
 import type {CompanionCorrectionRepair,CompanionWorkspace,Memory,State} from './types.ts';
+import {resolveBookVersion} from './book-versions.ts';
 
 const withoutFocus=(w:CompanionWorkspace)=>{const {focusIds,focusRevision,understandingRevision,revision,updatedAt,...identity}=w;return JSON.stringify(identity);};
 function usesContentIdentity(stamp:string|undefined):boolean {try{return JSON.parse(stamp??'').sourceStampVersion===2;}catch{return false;}}
@@ -15,7 +16,7 @@ function focusSourceStamp(state:State,w:CompanionWorkspace,questionId:string,pre
 }
 /** Only the recorded, source-preserving focus commits may advance a repair CAS. */
 export function correctionFocusRevision(state:State,p:CompanionCorrectionRepair,formedRevision:number):number|undefined {
-  const book=state.books.find(b=>b.id===p.bookId&&b.version===p.version);if(!book)return;
+  const book=resolveBookVersion(state.books.find(b=>b.id===p.bookId),p.version);if(!book)return;
   const current=workspaceFor(state,book,p.source),handoffs=p.focusHandoffs??[];
   if(formedRevision!==p.workspaceRevision)return;
   if(!handoffs.length)return current.revision===formedRevision?formedRevision:undefined;
@@ -48,7 +49,7 @@ export function correctionRepairStamp(state:State,repairId:string):string {
   return stampsEqual(stamp,p.dependencyStamp)?p.dependencyStamp:stamp;
 }
 function permitted(state:State,p:CompanionCorrectionRepair):boolean {
-  const book=state.books.find(b=>b.id===p.bookId&&b.version===p.version);
+  const book=resolveBookVersion(state.books.find(b=>b.id===p.bookId),p.version);
   if(!book||state.partnerId!==p.partnerId||!state.partners.some(v=>v.id===p.partnerId)||!p.oldDraft)return false;
   const scope=p.source==='background'?{...book,known:mergeRanges([...book.known,...(book.backgroundPrepared??[])])}:book;
   if(!isEvidenceAllowed(scope,p.ranges.map(r=>({...r,bookId:book.id,version:book.version}))))return false;

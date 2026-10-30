@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
+  <title>Yixu Reading Companion</title>
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="#AA5132"/>
+  <circle cx="183" cy="150" r="29" fill="#FFF8E9"/>
+  <circle cx="329" cy="150" r="29" fill="#F4C38C"/>
+  <path d="M108 219C154 199 201 201 244 225V389C201 365 154 363 108 380V219Z" fill="#FFF8E9"/>
+  <path d="M268 225C311 201 358 199 404 219V380C358 363 311 365 268 389V225Z" fill="#F4C38C"/>
+</svg>

@@ -3,8 +3,11 @@ import { chatAllowsMemory,isEvidenceAllowed } from './context.ts';
 import { recallTerms } from './recall.ts';
 import type { Book, Chat, DiscussionQuery, Range, State } from './types.ts';
 
+export function legacyPartnerOwnsUnlabelled(state:{readonly partnerId:string;readonly partners:readonly {readonly id:string;readonly legacyUnlabelled?:true}[]}):boolean{return state.partners.some(partner=>partner.id===state.partnerId&&partner.legacyUnlabelled===true)||state.partners.length===1&&state.partners[0].id===state.partnerId;}
+export function conversationBelongsToPartner(state:{readonly partnerId:string;readonly partners:readonly {readonly id:string;readonly legacyUnlabelled?:true}[]},conversation:{readonly partnerId?:string}):boolean{return conversation.partnerId===state.partnerId||!conversation.partnerId&&legacyPartnerOwnsUnlabelled(state);}
+
 export function chatBelongsToPartner(state: State, chat: Chat): boolean {
-  return chat.partnerId === state.partnerId || !chat.partnerId && state.partners.length === 1 && state.partners[0].id === state.partnerId;
+  return chat.partnerId === state.partnerId || !chat.partnerId && legacyPartnerOwnsUnlabelled(state);
 }
 export function parseDiscussionQuery(raw: unknown): DiscussionQuery {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('交流回查参数无效');
@@ -22,7 +25,7 @@ export function parseDiscussionQuery(raw: unknown): DiscussionQuery {
 /** Actual utterances, not a generated recollection. Permission precedes matching,
  * count and paging; old unlabelled multi-partner records are not attributed. */
 export function searchDiscussions(state: State, book: Book, request: DiscussionQuery, extra: Range[] = []) {
-  const allowed = state.chats.filter(c => c.presentation!=='paragraph' && c.bookId === book.id && chatBelongsToPartner(state, c) && chatAllowsMemory(state,c) && !c.excluded && !c.outdatedBy && !c.futureGrant && c.delivery !== 'pending' && isEvidenceAllowed(book, c.evidence, extra));
+  const allowed = state.chats.filter(c => c.presentation!=='paragraph' && c.bookId === book.id && chatBelongsToPartner(state, c) && chatAllowsMemory(state,c) && !c.excluded && !c.outdatedBy && !c.replacedBy && !c.futureGrant && c.delivery !== 'pending' && (!c.publication || c.publication.status === 'published') && (!c.readingReaction || c.readingReaction.status === 'delivered') && isEvidenceAllowed(book, c.evidence, extra));
   const query = normalize(request.query ?? ''), terms = recallTerms(query);
   const ranked = allowed.map(chat => {
     const text = normalize(chat.text), words = recallTerms(text);

@@ -1,9 +1,10 @@
 import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {lookup} from 'node:dns/promises';
 import https from 'node:https';
+import {resolve,dirname} from 'node:path';
 import {publicWebUrl} from '../src/core/web.ts';
 
-const configFile='.local/search-service.json';
+const configFile=resolve(process.env.YIXU_DESKTOP==='1'?(process.env.YIXU_CLIENT_DATA_ROOT??'.local/client-data'):'.local','search-service.json');
 export async function searchConfig(){try{return JSON.parse(await readFile(configFile,'utf8'));}catch(e){if(e.code==='ENOENT')return undefined;throw e;}}
 export async function configureSearch(input){
  const {provider}=input;
@@ -15,7 +16,7 @@ export async function configureSearch(input){
  if(provider!=='exa'&&previous?.endpoint!==endpoint&&previous?.apiKey&&!key)throw new Error('新搜索地址需单独配置密钥');
  const cfg={provider,endpoint,apiKey:provider==='exa'?'':key||(previous?.endpoint===endpoint?previous.apiKey:'')};
  if(provider==='tavily'&&!cfg.apiKey)throw new Error('此搜索服务需要独立API Key');
- await mkdir('.local',{recursive:true});await writeFile(configFile,JSON.stringify(cfg),{mode:0o600});
+ await mkdir(dirname(configFile),{recursive:true});await writeFile(configFile,JSON.stringify(cfg),{mode:0o600});
  return {provider,endpoint,hasKey:!!cfg.apiKey};
 }
 function safeAddress(address){

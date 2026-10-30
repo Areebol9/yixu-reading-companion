@@ -1,8 +1,8 @@
 import { ReadingEngine } from './engine.ts';
 import { recoverInterruptedState } from './startup.ts';
-import { initialState } from './state.ts';
 import {prepareMemoryRecovery} from './memory-recovery.ts';
 import type { ModelPort, Range, Store } from './types.ts';
+import type {EngineChange} from './engine-events.ts';
 
 type HostMethod = 'readingSources' | 'startCapture' | 'stopCapture' | 'readingStatus' | 'reaction' | 'startVoice' | 'stopVoice' | 'cancelVoice';
 export type RuntimeHost = { available: boolean; request<T = unknown>(method: HostMethod, payload?: unknown): Promise<T> };
@@ -17,10 +17,12 @@ export type RuntimeUIEvent =
 
 // Shared startup for UI and future native runtimes. Storage and model transport are injected.
 export async function restoreReadingEngine(store: Store, model: ModelPort) {
-  const loaded=await store.load(),state=loaded??initialState();
+  // New archives are initialized explicitly before being opened.
+  const state=await store.load();
+  if(!state)throw Error('这份阅读记录暂时无法读取。原文件已保留，请检查存放位置或从阅读存档选择其他记录。');
   await prepareMemoryRecovery(state,store);
   const recovery = recoverInterruptedState(state);
-  if (!loaded||recovery.changed) await store.save(state);
+  if (recovery.changed) await store.save(state);
   return { engine: new ReadingEngine(state, store, model), recovery };
 }
 
@@ -36,7 +38,7 @@ export class ReadingRuntime {
   private capture?: CaptureAnchor;
   private voice?: VoiceAnchor;
   private voiceStarting = false;
-  private listeners = new Set<() => void>();
+  private listeners = new Set<(change?:EngineChange) => void>();
   private uiEvents: RuntimeUIEvent[] = [];
   private lastStatus = '';
   private disposed = false;
@@ -44,14 +46,14 @@ export class ReadingRuntime {
   get voiceActive(): boolean { return !!this.voice; }
   constructor(engine: ReadingEngine, host: RuntimeHost) {
     this.engine = engine; this.host = host;
-    this.unsubscribe = engine.subscribe(() => this.sync());
+    this.unsubscribe = engine.subscribe(change => this.sync(change));
     engine.onReaction = text => {
       const capture = this.capture;
       if (capture && this.live(capture)) void this.host.request('reaction', { captureToken: capture.token, text }).catch(e => this.reportError(e));
     };
   }
-  subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
-  private emit(): void { if (!this.disposed) this.listeners.forEach(listener => listener()); }
+  subscribe(listener: (change?:EngineChange) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
+  private emit(change?:EngineChange): void { if (!this.disposed) this.listeners.forEach(listener => listener(change)); }
   takeUIEvents(): RuntimeUIEvent[] {
     return this.uiEvents.splice(0).filter(event => event.kind !== 'openConversation' ||
       this.engine.session?.active && this.engine.session.bookId === event.bookId && this.engine.session.id === event.sessionId && this.engine.session.generation === event.generation);
@@ -70,7 +72,7 @@ export class ReadingRuntime {
     return !this.disposed && !!current?.active && current.bookId === anchor.bookId && current.id === anchor.sessionId && current.generation === anchor.generation;
   }
   private requireHost(): void { if (this.disposed) throw new DOMException('运行已结束', 'AbortError'); if (!this.host.available) throw new Error('此功能需要原生客户端'); }
-  private sync(): void {
+  private sync(change?:EngineChange): void {
     const voice = this.voice, capture = this.capture;
     if (voice && !this.live(voice)) {
       this.voice = undefined; this.recording = false; this.voiceDraft = '';
@@ -85,7 +87,7 @@ export class ReadingRuntime {
       const key = JSON.stringify(value);
       if (key !== this.lastStatus) { this.lastStatus = key; void this.host.request('readingStatus', value).catch(e => this.reportError(e)); }
     }
-    this.emit();
+    this.emit(change);
   }
   async startCapture(bookId: string, sourceId: string): Promise<void> {
     this.requireHost();
@@ -123,10 +125,10 @@ export class ReadingRuntime {
       throw error;
     } finally { if(this.captureOpening===opening)this.captureOpening=undefined;this.emit(); }
   }
-  async stopCapture(): Promise<void> {
+  async stopCapture(preservePageSource=false): Promise<void> {
     this.captureOpening?.abort(new DOMException('屏幕跟随已取消','AbortError'));this.captureOpening=undefined;
     const anchor = this.capture; this.capture = undefined; this.lastStatus = '';
-    this.engine.observing(false); this.engine.sourceActive(false);
+    this.engine.observing(false); if(!preservePageSource||anchor)this.engine.sourceActive(false);
     if (anchor) await this.host.request('stopCapture', { captureToken: anchor.token });
   }
   async selectReadingSource(bookId: string, sourceId: string): Promise<void> {
@@ -135,7 +137,7 @@ export class ReadingRuntime {
     const sources = await this.host.request<{ id: string; installed: boolean }[]>('readingSources');
     if (!sources.some(s => s.id === sourceId && s.installed)) throw new Error('所选阅读应用不可用');
     if (this.capture || this.engine.session?.observing) await this.stopCapture();
-    this.engine.book(bookId).readingSourceId = sourceId; await this.engine.persist();
+    await this.engine.editScopedState({collections:{books:[bookId]}},state=>{const book=state.books.find(book=>book.id===bookId);if(!book)throw Error('未找到作品');book.readingSourceId=sourceId;});
   }
   async startOrSendVoice(bookId: string, conversationId?: string): Promise<void> {
     this.requireHost();
@@ -179,8 +181,8 @@ export class ReadingRuntime {
         await this.engine.observe(anchor.bookId, p.text, p.kind as 'body' | 'comment' | undefined, p.coverage as 'fragments' | 'continuous-page' | undefined);
       }
       if (name === 'source' && typeof p.active === 'boolean') this.engine.sourceActive(p.active);
-      if (name === 'stop') this.engine.stop();
-      if (name === 'quiet') this.engine.quiet(!this.engine.session?.quiet);
+      if (name === 'stop') await this.engine.stop();
+      if (name === 'quiet') await this.engine.quiet(!this.engine.session?.quiet);
       if (name === 'openConversation') this.post({ kind: 'openConversation', bookId: anchor.bookId, sessionId: anchor.sessionId, generation: anchor.generation });
       if (name === 'captureStopped') {
         this.capture = undefined; this.lastStatus = ''; this.engine.observing(false);

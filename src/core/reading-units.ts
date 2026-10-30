@@ -1,6 +1,7 @@
 import {bookTextSlice} from './books.ts';
 import { bookLength, chapterAt, covers, mergeRanges, requireBookText, subtractRanges } from './books.ts';
 import type { Book, Range, ReadingStrategy } from './types.ts';
+import {originalParagraphBatches,originalParagraphRanges} from './original-paragraphs.ts';
 
 /** Ready to follow new pages; deferred material has NOT been understood. */
 export function readyToRead(book: { readonly known: readonly Range[]; readonly prepared: readonly Range[]; readonly buffered?: readonly Range[] }): boolean {
@@ -23,6 +24,20 @@ function boundaries(text: string, start: number, end: number): number[] {
 }
 
 export type ReadingPlan = { batches: Range[][]; buffered: Range[]; layout: Range[] };
+
+/** Companion preparation shares original paragraphs with the reading page and maintenance. */
+export function planOriginalParagraphReading(book:Book,allowed:Range[],pending:Range[],size=6000):ReadingPlan{
+  if(!Number.isSafeInteger(size)||size<1)throw Error('阅读批次大小无效');
+  const grants=mergeRanges(allowed),wanted=mergeRanges(pending.flatMap(range=>grants.map(grant=>({start:Math.max(range.start,grant.start),end:Math.min(range.end,grant.end)})))),batches:Range[][]=[],layout:Range[]=[];
+  for(const chapter of book.chapters){
+    const targets=mergeRanges(wanted.map(range=>({start:Math.max(range.start,chapter.start),end:Math.min(range.end,chapter.end)})));if(!targets.length)continue;
+    const paragraphs=originalParagraphRanges(book,{start:chapter.start,end:chapter.end});
+    const whitespace=subtractRanges(targets,paragraphs);layout.push(...whitespace);
+    if(paragraphs.length===1&&bookTextSlice(book,paragraphs[0].start,paragraphs[0].end).trim()===chapter.title){layout.push(...targets);continue;}
+    batches.push(...originalParagraphBatches(book,targets,size,grants));
+  }
+  return{batches,layout:mergeRanges(layout),buffered:subtractRanges(wanted,[...batches.flat(),...layout])};
+}
 
 /** Revisit the permitted sentence around a hole. Stop an unfinished edge at the
  * permission boundary; never borrow unseen text to complete it. Keep chapters

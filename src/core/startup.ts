@@ -8,6 +8,8 @@ import type { State } from './types.ts';
 import {validateCorrectionRepairs,pruneCorrectionRepairs} from './companion-correction-repair.ts';
 import {validatePublishedViews} from './published-views.ts';
 import {validateMaintenanceDispatchHeaders} from './maintenance-dispatch.ts';
+import {validateAgentSessionHeaders} from './agent-sessions.ts';
+import {validateAgentResponses} from './agent-session-backup.ts';
 
 export type StartupRecovery = { changed: boolean; questions: number; temporaryQuestions: number; unknownCalls: number; interruptedTasks?: number };
 
@@ -17,6 +19,11 @@ export function recoverInterruptedState(state: State): StartupRecovery {
   const result: StartupRecovery = { changed: false, questions: 0, temporaryQuestions: 0, unknownCalls: 0 };
   validatePublishedViews(state);
   validateMaintenanceDispatchHeaders(state);
+  validateAgentSessionHeaders(state);
+  validateAgentResponses(state);
+  // A durable paused task was released normally and retains its original claim.
+  // An orphaned running task has no such lifecycle evidence; keep its recovery
+  // explicit instead of treating every crash as permission to continue.
   for(const job of state.maintenanceJobs??[])if(job.status==='running'){job.status='blocked';job.reason='维护执行已中断，原材料与未完成覆盖保留';result.changed=true;}
   const flags=()=>JSON.stringify([state.memories.map(m=>[m.invalidatedBy,m.forgotten,m.backgroundOrigin]),state.chats.map(c=>[c.outdatedBy,c.replacedBy,c.excluded,c.delivery]),
     (state.habits??[]).map(h=>[h.invalidatedBy,h.forgotten,h.retiredBy])]);

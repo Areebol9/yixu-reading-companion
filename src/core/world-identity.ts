@@ -1,3 +1,5 @@
+import {bookVersionPrefixLength} from './book-versions.ts';
+import {bookVersionAllowsRange,bookVersionAllowsRanges,resolveBookVersion} from './book-versions.ts';
 import {memoryTextLength,requireMemoryText} from './memory-bodies.ts';
 import {covers,id,mergeRanges,normalize} from './books.ts';
 import {evidence,isBackgroundMemory,isCurrentMemory,isUsableSourceVersion,isEvidenceAllowed,readableRanges,usableMemories,memoryIsForgotten} from './context.ts';
@@ -37,7 +39,7 @@ export function permittedWorldMemories(state:State,book:Book,options:NarrativeRe
 }
 export type EntityIndexItem={id:string;names:{name:string;cognition:NonNullable<Memory['identityClaim']>['cognition'];memoryId:string}[];claimIds:string[]};
 export function entityIndex(state:State,book:Book,options:NarrativeReadOptions&{query?:string}={}):EntityIndexItem[]{
-  const claims=permittedWorldMemories(state,book,options).filter(m=>m.identityClaim),roots=(state.entityRoots??[]).filter(r=>r.bookId===book.id&&r.version===book.version&&r.partnerId===state.partnerId&&(r.source==='background')===(options.source==='background'));
+  const claims=permittedWorldMemories(state,book,options).filter(m=>m.identityClaim),roots=(state.entityRoots??[]).filter(r=>r.bookId===book.id&&bookVersionPrefixLength(book,r.version)!==undefined&&r.partnerId===state.partnerId&&(r.source==='background')===(options.source==='background'));
   return roots.flatMap(root=>{const owned=claims.filter(m=>m.identityClaim!.entityId===root.id),names=owned.filter(m=>m.identityClaim!.type==='name').map(m=>({name:m.identityClaim!.name!,cognition:m.identityClaim!.cognition,memoryId:m.id}));if(!owned.length||options.query&&!names.some(n=>normalize(n.name).includes(normalize(options.query!))))return [];return[{id:root.id,names,claimIds:owned.map(m=>m.id)}];});
 }
 export function entityMemories(state:State,book:Book,ids:readonly string[],options:NarrativeReadOptions&{history?:boolean}={}):Memory[]{
@@ -47,7 +49,7 @@ export function entityMemories(state:State,book:Book,ids:readonly string[],optio
   const seeds=new Set(wanted);for(const m of all){const c=m.identityClaim;if(c?.type==='same-identity'&&c.cognition==='observed'&&c.targetId&&visible.has(c.entityId)&&visible.has(c.targetId)&&(seeds.has(c.entityId)||seeds.has(c.targetId))){wanted.add(c.entityId);wanted.add(c.targetId);}}
   return all.filter(m=>worldEntityIds(m).some(id=>wanted.has(id)));
 }
-export function worldCoverage(state:State,book:Book,source:Memory['source']='preparation'):Range[]{return mergeRanges((state.readings??[]).filter(r=>r.bookId===book.id&&r.version===book.version&&r.partnerId===state.partnerId&&(r.source==='background')===(source==='background')&&r.processing==='model'&&r.worldCandidate==='v1').flatMap(r=>r.ranges).filter(r=>isEvidenceAllowed(book,[evidence(book,r)])));}
+export function worldCoverage(state:State,book:Book,source:Memory['source']='preparation'):Range[]{return mergeRanges((state.readings??[]).filter(r=>r.bookId===book.id&&bookVersionAllowsRanges(book,r.version,r.ranges)&&r.partnerId===state.partnerId&&(r.source==='background')===(source==='background')&&r.processing==='model'&&r.worldCandidate==='v1').flatMap(r=>r.ranges).filter(r=>isEvidenceAllowed(book,[evidence(book,r)])));}
 export function prepareWorldReply(state:State,book:Book,reply:ReadingReply,enabled:boolean):{reply:ReadingReply;roots:EntityRoot[]}{
   if(!enabled){if(reply.entityRoots!==undefined||reply.thoughts.some(t=>Object.keys(worldNote(t)).length))throw Error('当前任务未开放世界与主体候选写入');return {reply,roots:[]};}
   const proposals=parseEntityRoots(reply.entityRoots)??[],mapping=new Map(proposals.map(p=>[p.key,id()]));
@@ -78,7 +80,7 @@ export function bindWorldPlan(state:State,book:Book,added:Memory[],sources:Reado
   // Gather the whole missing binding set before constructing any entity edges.
   // The directory may suggest recovery, but only actual parents authorize it.
   for(const m of added){if(!Object.keys(worldNote(m)).length)continue;
-    if(!exact(m).length||exact(m).some(e=>e.bookId!==book.id||e.version!==book.version||!covers(refs,e)||!isEvidenceAllowed(book,[e])))throw Error('身份、归属与规则声明须有自身精确原文依据，完整围栏不能代替出处');
+    if(!exact(m).length||exact(m).some(e=>e.bookId!==book.id||!bookVersionAllowsRange(book,e.version,e)||!covers(refs,e)||!isEvidenceAllowed(book,[e])))throw Error('身份、归属与规则声明须有自身精确原文依据，完整围栏不能代替出处');
     for(const entityId of worldEntityIds(m)){
       const root=availableRoots.find(r=>r.id===entityId);if(!root||!sameLane(m,root))throw Error('主体编号不属于当前书版本、伙伴及来源渠道');
       const declaration=all.find(x=>parents.includes(x.id)&&usable(x)&&x.identityClaim?.type==='name'&&x.identityClaim.entityId===entityId&&validBinding(state,book,x,entityId))??all.find(x=>added.includes(x)&&x.identityClaim?.type==='name'&&x.identityClaim.entityId===entityId&&usable(x)&&exact(x).length);
@@ -101,7 +103,7 @@ export function bindWorldPlan(state:State,book:Book,added:Memory[],sources:Reado
 }
 export function validateWorldState(state:State):void{
   if(state.entityRoots!==undefined&&(!Array.isArray(state.entityRoots)||state.entityRoots.length>200000))throw Error('主体目录无效');const ids=new Set<string>();
-  for(const root of state.entityRoots??[]){const book=state.books.find(b=>b.id===root.bookId),origin=state.memories.find(m=>m.id===root.originMemoryId);if(typeof root.id!=='string'||!root.id||ids.has(root.id)||!book||root.version!==book.version||!origin||!sameLane(origin,root)||!['reading','background'].includes(root.source)||!worldEntityIds(origin).includes(root.id))throw Error('主体根的具体书版本和来源无效');ids.add(root.id);}
+  for(const root of state.entityRoots??[]){const book=state.books.find(b=>b.id===root.bookId),origin=state.memories.find(m=>m.id===root.originMemoryId);if(typeof root.id!=='string'||!root.id||ids.has(root.id)||!book||bookVersionPrefixLength(book,root.version)===undefined||!origin||!sameLane(origin,root)||!['reading','background'].includes(root.source)||!worldEntityIds(origin).includes(root.id))throw Error('主体根的具体书版本和来源无效');ids.add(root.id);}
   for(const m of state.memories){parseWorldNote(worldNote(m) as any);if(Object.keys(worldNote(m)).length&&(!m.sourceEvidence?.length&&!m.sourceQuote||['context','stage','state','arc'].includes(m.kind)))throw Error('身份与归属只能附在有精确源的独立正文');const entities=worldEntityIds(m);if(entities.length){if(!Array.isArray(m.entityBindings)||m.entityBindings.length>24||entities.some(entityId=>!m.entityBindings!.some(b=>b.entityId===entityId)))throw Error('主体绑定缺少实际身份来源版本');for(const b of m.entityBindings){const root=state.entityRoots?.find(r=>r.id===b.entityId),owner=state.memories.find(x=>x.id===b.memoryId);if(!root||!owner||!sameLane(m,root)||!sameLane(owner,root)||owner.evidence.some(e=>!covers(m.evidence,e))||owner.identityClaim?.type!=='name'||owner.identityClaim.entityId!==root.id||!owner.sourceEvidence?.length&&!owner.sourceQuote)throw Error('主体绑定来源无效');}}
     const refs=[...(m.attribution?.contentRef?[m.attribution.contentRef.memoryId]:[]),...(m.ruleLinks??[]).map(x=>x.memoryId),m.worldChangeOf,m.identityClaim?.changeOf].filter((s):s is string=>!!s);for(const key of refs){const target=state.memories.find(x=>x.id===key);if(!target||target.bookId!==m.bookId||target.partnerId!==m.partnerId||isBackgroundMemory(target)!==isBackgroundMemory(m)||target.evidence.some(e=>!covers(m.evidence,e)))throw Error('身份、归属或规则具体版本越出完整围栏');}
     const ref=m.attribution?.contentRef;if(ref){const target=state.memories.find(x=>x.id===ref.memoryId)!;if(ref.end>memoryTextLength(target)||target.kind==='question'&&(ref.start!==0||ref.end!==memoryTextLength(target)))throw Error('归属正文引用越界');}

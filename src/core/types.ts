@@ -3,22 +3,44 @@ export const READING_THOUGHT_LIMIT = 16;
 export const READING_STATE_LIMIT = 6;
 export const READING_MEMORY_LIMIT = READING_THOUGHT_LIMIT + 32 + 1 + 1 + READING_STATE_LIMIT + 6;
 export type ObservationCoverage = 'fragments' | 'continuous-page';
+export type ReadingRecoveryTarget=
+  |{kind:'question';questionId:string;requestId?:string}
+  |{kind:'scene';bookId:string;requestId:string}
+  |{kind:'maintenance';jobId:string;requestId?:string};
+export type ReadingRecoveryExecution='local-result'|'receipt'|'continue'|'none';
+export type ReadingRecoveryCapability={
+  kind:'local'|'condition'|'user'|'settlement'|'history';
+  action?:'recover-question'|'retry-question'|'recover-scene'|'resume-maintenance'|'close-lost-maintenance';
+  reason?:string;
+  execution:ReadingRecoveryExecution;
+  automatic:boolean;
+  automaticState?:'queued'|'running'|'stopped';
+  availability:'available'|'running'|'blocked'|'history';
+  responsibility:'running'|'unfinished'|'settlement'|'history';
+  target?:ReadingRecoveryTarget;
+  trigger?:'never-dispatched'|'session-not-dispatched'|'length'|'condition-change'|'paused';
+};
+export type ReadingRecoveryDecision=ReadingRecoveryCapability&{target:ReadingRecoveryTarget};
 /** Transient projection of an existing owner or durable request, never a task store. */
 export type ReadingActivity = {
   id:string;bookId:string;partnerId:string;
+  sessionId?:string;
+  responsibility?:'running'|'unfinished'|'settlement'|'history';
   kind:'scene'|'question'|'maintenance'|'expression';
   stage:'queued'|'preparing'|'waiting-model'|'tools'|'validating'|'saving'|'waiting-publish'|'paused'|'unknown'|'failed'|'complete'|'quiet'|'obsolete';
   purpose:'scene-judgment'|'answer'|'paragraph-reply'|'deep-maintenance'|'expression'|'paragraph-comment';
   since:number;startedAt:number;updatedAt:number;endedAt?:number;reason?:string;
   questionId?:string;jobId?:string;requestId?:string;chatId?:string;
-  progress?:{chars?:number;completedChars?:number;modelRounds?:number};
+  recovery?:ReadingRecoveryCapability;
+  progress?:{chars?:number;completedChars?:number;modelRounds?:number;savedDocuments?:number;savedViews?:number;pendingChats?:number;pendingViews?:number};
 };
-export type MaintenanceProgress={bookId:string;knownChars:number;preparedChars:number;missingChars:number;queuedChars:number;workingChars:number;blockedChars:number;overviewPending:number;blockedJobs:number;queuedJobs:number;workingJobs:number};
+export type MaintenanceProgress={oldestPending?:{start:number;chapterTitle?:string};pendingChapterCount?:number;bookId:string;knownChars:number;preparedChars:number;missingChars:number;queuedChars:number;workingChars:number;blockedChars:number;overviewPending:number;pendingChatCount:number;blockedJobs:number;queuedJobs:number;workingJobs:number};
 // A local position preview, never a reading permission or prepared range.
 export type LocatedPosition = { id: string; bookId: string; version: string; position: number; chapter: string; excerpt: string };
 export type WebReference = { title: string; url: string; read?: boolean };
 export type Evidence = Range & { bookId: string; version: string };
-export type Chapter = Range & { title: string; index: number; contentStart?:number;contentEnd?:number };
+export type Chapter = Range & { title: string; index: number; contentStart?:number;contentEnd?:number;kind?:'volume'|'part'|'chapter'|'section'|'preface'|'epilogue'|'appendix'|'body';level?:number;parentIndex?:number };
+export type BookDirectory={version:string;entries:Chapter[];unresolved:boolean;method:'local'|'model'};
 export type ReadingStrategy = 'structured' | 'full-original' | 'companion';
 export type ReadingMode = 'legacy' | 'stages' | 'full-original' | 'companion';
 export type ArcCandidate = 'v1';
@@ -29,12 +51,18 @@ export type ReadingProfile = { readingStrategy: ReadingStrategy; narrativeMode: 
 export type CompanionCandidate = { earlyReaction?:boolean; historicalSearch?:boolean; focusedExpression?:boolean; fairScheduling?:boolean; workspaceHandoff?:boolean };
 export type Book = {
   id: string; title: string; version: string; text: string; textLength?: number; chapters: Chapter[];
+  /** Navigational hierarchy is independent of stable reading-section indices. */
+  directory?:BookDirectory;
+  /** Every accepted historical hash names exactly this verified prefix, never
+   * the appended text. Revalidated against originals on import/cold recovery. */
+  sourceLineage?:{currentVersion:string;prefixes:readonly {version:string;chars:number;chapters:number}[]};
   /** Task-local range lease. Never stored or pushed to a renderer as a full book. */
   residentRanges?: (Range&{text:string})[];
   /** Actual observations for natural scene cadence; never a reading grant. */
   sceneObserved?:{partnerId:string;ranges:Range[]}[];
   known: Range[]; position: number; prepared: Range[]; archived: boolean; createdAt: number;
   backgroundPrepared?: Range[];
+  partnerProgress?:{partnerId:string;prepared:Range[];backgroundPrepared?:Range[];buffered?:Range[];fullOriginalPending?:Range[]}[];
   // Authorized unfinished material, retained across sessions; not model understanding.
   buffered?: Range[];
   readingSourceId?: string;
@@ -49,8 +77,8 @@ export type Book = {
   fullOriginalPending?: Range[];
 };
 export type MemoryKind = 'story' | 'opinion' | 'question' | 'shared' | 'user' | 'context' | 'stage' | 'state' | 'arc';
-export function memoryTextLimit(kind:MemoryKind|undefined):number {
-  return kind==='opinion'?READING_DOCUMENT_MAX_CHARS:kind==='context'?1000:1800;
+export function memoryTextLimit(kind:MemoryKind|undefined):number|undefined {
+  return kind==='opinion'?undefined:kind==='context'?1000:1800;
 }
 export type NarrativeMode = 'legacy' | 'stages';
 export type StateWriteVersion = 1 | 2;
@@ -89,10 +117,14 @@ export type ReadingDelivery={protocol:'reading-text-v1'|'reading-documents-v1';p
 export function isReadingDelivery(value:unknown):value is ReadingDelivery {
   return!!value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).every(k=>k==='protocol'||k==='proposal')&&['reading-text-v1','reading-documents-v1'].includes((value as ReadingDelivery).protocol)&&['none','accepted','rejected'].includes((value as ReadingDelivery).proposal);
 }
-export type SceneOpportunity={chapterIndex:number;slot:1|2|3|4|'end';position:number;seenChars:number};
+export type SceneOpportunity={chapterIndex:number;slot:number|'end';position:number;seenChars:number;
+  /** Task-local original paragraphs. Neither reading progress nor maintenance permission. */
+  preview?:Range&{targetStart:number}};
+/** Observation permission has actually reached its normal storage boundary. */
+export type ReadingObservationSaved=Readonly<{id:string;instanceId:string;bookId:string;version:string;partnerId:string;sessionId:string;observation:number;ranges:ReadonlyArray<Readonly<Range>>;savedAt:number}>;
 export type SceneInsight={text:string;sourceIds:string[]};
 export type SceneInsightRecord={text:string;evidence:Evidence[];memoryIds:string[];chatIds:string[];viewIds?:string[]};
-export type ReadingRecord = { id: string; bookId: string; version: string; partnerId: string; source: 'preparation' | 'reading' | 'background'; ranges: Range[]; memoryIds: string[]; createdAt: number; processing?: 'model' | 'layout'; expressionOnly?:true; sceneCommentIds?:string[]; sceneJudgment?:'quiet'|'expressions'; sceneOpportunity?:SceneOpportunity;sceneInsight?:SceneInsightRecord; expressionContract?:'paragraph-expressions-v1'; draftId?: string;supersededReceiptIds?:string[];arcCandidate?:ArcCandidate;worldCandidate?:WorldCandidate;delivery?:ReadingDelivery };
+export type ReadingRecord = { id: string; bookId: string; version: string; partnerId: string; source: 'preparation' | 'reading' | 'background'; ranges: Range[]; memoryIds: string[]; createdAt: number; processing?: 'model' | 'layout'; expressionOnly?:true; sceneResult?:{requestId:string;chatIds:string[]}; sceneCommentIds?:string[]; sceneJudgment?:'quiet'|'expressions'; sceneOpportunity?:SceneOpportunity;sceneInsight?:SceneInsightRecord; expressionContract?:'paragraph-expressions-v1'; draftId?: string;supersededReceiptIds?:string[];arcCandidate?:ArcCandidate;worldCandidate?:WorldCandidate;delivery?:ReadingDelivery };
 /** A durable handoff containing references only; understanding stays in ordinary Memory. */
 export type CompanionWorkspace = {
   bookId: string; version: string; partnerId: string; source: 'reading' | 'background';
@@ -108,7 +140,7 @@ export function isWorkspaceVersion(value:unknown,revision:number|undefined):valu
   if(!value||typeof value!=='object'||Array.isArray(value)||revision===undefined||!Number.isSafeInteger(revision)||revision<0)return false;
   const v=value as WorkspaceVersion;
   return Object.keys(v).every(k=>['understandingId','understandingRevision','focusRevision','workingIds','workingRevision'].includes(k))&&
-    (v.workingIds===undefined||Array.isArray(v.workingIds)&&v.workingIds.length<=16&&v.workingIds.every(id=>typeof id==='string'&&id.length>0&&id.length<=128)&&new Set(v.workingIds).size===v.workingIds.length)&&
+    (v.workingIds===undefined||Array.isArray(v.workingIds)&&v.workingIds.every(id=>typeof id==='string'&&id.length>0&&id.length<=128)&&new Set(v.workingIds).size===v.workingIds.length)&&
     (v.workingRevision===undefined||Number.isSafeInteger(v.workingRevision)&&v.workingRevision>=0&&v.workingRevision<=revision)&&
     (v.understandingId===undefined||typeof v.understandingId==='string'&&v.understandingId.length>0&&v.understandingId.length<=128)&&
     [v.understandingRevision,v.focusRevision].every(n=>Number.isSafeInteger(n)&&n>=0&&n<=revision);
@@ -131,21 +163,34 @@ export type CommonHabit = {
   sourceChatId?: string; sourceBookId?: string; replaces?: string; retiredBy?: string;
   forgotten: boolean; invalidatedBy?: string;
 };
-export const READING_DOCUMENT_MAX_CHARS=12000;
-export function documentCapacity(chars:number){return{chars,max:READING_DOCUMENT_MAX_CHARS,remaining:READING_DOCUMENT_MAX_CHARS-chars,unit:'UTF-16' as const};}
+export function documentCapacity(chars:number){return{chars,unit:'UTF-16' as const};}
 export type MemoryBodyRef = { key: string; hash: string; chars: number };
 export type MemoryBody = { key: string; hash: string; text: string };
-export type DocumentEdit = {oldText:string;newText:string;sourceIds?:string[]};
+/** Coordinates belong to one immutable body; line ends are inclusive. */
+export type DocumentLocation = {version:string;hash:string;start?:number;end?:number;startLine?:number;endLine?:number};
+export type DocumentEdit = {oldText?:string;location?:DocumentLocation;newText:string;sourceIds?:string[]};
+/** Exposure is retained for withdrawal, never inferred from model adoption. */
+export type FormationSources = {kind:'formation-sources-v1';materialRef?:TaskMaterialRef;memoryIds:string[];chatIds:string[];viewIds:string[];habitIds?:string[];evidence:Evidence[]};
+export type DocumentOperation = 'create'|'develop'|'revise'|'merge'|'organize'|'retire'|'restore';
 /** Derived change locations in the full prose, not a second fact store. */
 export type DocumentRevision = {previousId:string;changes:{before:Range;after:Range;sourceEvidence:Evidence[]}[]};
 export type Memory = WorldNote & SemanticNote & {
+  /** Book analysis is shared; persona experience remains private. partnerId records the author. */
+  scope?:'book'|'partner';
   historicalCommentIds?:string[];
   id: string; bookId: string; partnerId: string; kind: MemoryKind; text?: string;
   /** Absence of text with a reference means unloaded, never an empty understanding. */
   bodyRef?: MemoryBodyRef;
   /** Optional navigation only; these fields do not establish facts or reading permission. */
+  organization?:import('./document-organization.ts').DocumentOrganization;
   documentTitle?: string; navigationCues?: string[]; knowledgeDistribution?:import('./knowledge-distribution.ts').KnowledgeDistribution;
   documentRevision?:DocumentRevision;
+  formationSources?:FormationSources;
+  /** Concrete write bases, separate from semantic adoption. */
+  writeBaseIds?:string[];
+  /** A withdrawn current document remains an explicitly readable historical version. */
+  documentState?:'retired';
+  documentSuccessors?:string[];
   evidence: Evidence[]; parents: string[]; chatIds: string[];
   /** A completed old background interpretation that lost the foreground handoff. Read-only history. */
   historicalOnly?: true;
@@ -153,6 +198,8 @@ export type Memory = WorldNote & SemanticNote & {
   /** Rechecking or correcting independent reading does not make it shared reading. */
   backgroundOrigin?: true;
   correctionOf?: string; replacedBy?: string; invalidatedBy?: string;
+  /** Additional explicit predecessors of a merged understanding; the primary is correctionOf. */
+  mergePreviousIds?: string[];
   /** Withdrawal lineage only: retired repair material never becomes a claim source. */
   correctionRepairSources?:{memoryIds:string[];chatIds:string[];habitIds:string[]};
   basis?: MemoryBasis;
@@ -180,7 +227,11 @@ export type Memory = WorldNote & SemanticNote & {
   arcChangeOf?: string;
 };
 export type HydratedMemory = Memory & {text:string};
+export type MessageEmojiReaction={actor:'user'|'partner';actorId:string;emoji:string;createdAt:number};
 export type Chat = {
+  emojiReactions?:MessageEmojiReaction[];
+  presentationReceipt?:{notifiedAt?:number;seenAt?:number;clearedAt?:number};
+  recoveredFrom?:{requestId:string;sourceTime:number;recoveredAt:number};
   expressionAnchor?:import('./paragraph-comments.ts').ParagraphAnchor;
   expressionContract?:'paragraph-expressions-v1'; historicalCommentIds?:string[]; presentation?:'paragraph'; anchor?:import('./paragraph-comments.ts').ParagraphAnchor;
   formationRanges?:Range[]; formedThrough?:number; sharedChatId?:string; paragraphCommentId?:string;
@@ -211,16 +262,60 @@ export type Chat = {
   readingReaction?: { requestKey:string; raw:string; status:'saved'|'delivered'|'suppressed'; reason?:string;usageId?:string;attempts?:{raw:string;status:'saved'|'delivered'|'suppressed';reason?:string;usageId?:string}[] };
 };
 export type TranscriptRevision = { id: string; bookId: string; originalId: string; replacementId: string; createdAt: number };
-export type Conversation = { id: string; bookId: string; title: string; manualTitle: boolean; start: number; end: number; createdAt: number; kind?: 'reading' | 'discussion' };
-export type Partner = { id: string; name: string; traits: string; backgroundBooks: string[] };
+export type Conversation = {
+  partnerId?:string; id:string; bookId:string; title:string; manualTitle:boolean;
+  start:number; end:number; createdAt:number; kind?:'reading'|'discussion';
+  /** Selection time, independent of publication/reading activity timestamps. */
+  lastUsedAt?:number;
+  previousConversationId?:string;
+  continuationReason?:'user'|'context-compacted'|'restore-pressure'|'context-invalidated';
+  context?:{nativeSessionId:string;lastTaskId?:string;previousTaskId?:string};
+};
+export type PartnerAvatar = {kind:'preset';id:string}|{kind:'image';assetId:string};
+export type PartnerAvatarAsset = {id:string;mimeType:'image/png'|'image/jpeg'|'image/webp';dataUrl:string;createdAt:number};
+export type PartnerPersonaParameters = {identityBackground?:string;values?:string;thinking?:string;interests?:string;emotions?:string;boundaries?:string;expression?:string};
+export type PartnerPreferences = {userAddress?:string;partnerAddress?:string;relationshipRequests?:string;backgroundPersona?:boolean;limitAutomaticRequests?:boolean;persona?:PartnerPersonaParameters;fixedPersona?:Array<keyof PartnerPersonaParameters>};
+export type Partner = { legacyUnlabelled?:true; id: string; name: string; traits: string; backgroundBooks: string[]; personaVersionId?:string;templateId?:string;avatar?:PartnerAvatar;preferences?:PartnerPreferences;modelService?:Service };
+/** Only explicitly adopted resources belong here; candidates stay outside runtime persona data. */
+export type PartnerPersonaExample = {
+  readonly id:string;readonly version:string;readonly source:{readonly kind:'fictional'|'external';readonly reference:string};readonly text:string;
+  /** Exact accepted persona content. Section bases also capture the effective user dimensions. */
+  readonly basis:({readonly text:string;readonly sections?:never}|{readonly sections:readonly {readonly title:string;readonly text:string}[];readonly text?:never})&{readonly parameters?:Readonly<PartnerPersonaParameters>};
+};
+export type PartnerPersonaTemplate = {id:string;name:string;version:string;text:string;summary?:string;avatar:PartnerAvatar;protectedSections:readonly string[];adoptedExamples?:readonly PartnerPersonaExample[]};
+export type PartnerPersonaSource = {kind:'memory'|'chat';id:string;bookId:string;version:string}|{kind:'theme';id:string};
+export type PartnerPersonaEdit = {section:string;oldText:string;newText:string};
+export type PartnerPersonaRevision = {partnerId:string;baseVersionId:string;edits:PartnerPersonaEdit[];reason:string;sources:PartnerPersonaSource[]};
+export type PartnerPersonaVersion = {id:string;partnerId:string;templateId:string;templateVersion:string;previousId?:string;text:string;createdAt:number;reason:string;sources:PartnerPersonaSource[];edits?:PartnerPersonaEdit[];adoptedExamples?:PartnerPersonaExample[]};
+/** Captured once per task. A missing version identifies the untouched legacy traits. */
+export type PartnerPersonaSnapshot = {partnerId:string;personaVersionId?:string;name:string;text:string;preferences:PartnerPreferences;participation?:'persona'|'none';language?:'zh-CN'|'en';modelService?:Service;adoptedExamples?:PartnerPersonaExample[]};
+export type PartnerThemeVersion = {id:string;themeId:string;partnerId:string;previousId?:string;revision:number;title:string;summary:string;text:string;reason:string;sources:PartnerPersonaSource[];createdAt:number;edits?:{oldText:string;newText:string}[];appendText?:string;retired?:true};
+export type PartnerThemeRevision = {partnerId:string;themeId?:string;baseVersionId?:string;title?:string;summary?:string;text?:string;edits?:{oldText:string;newText:string}[];appendText?:string;reason:string;sources:PartnerPersonaSource[];retired?:true};
+export type PartnerMaintenanceProposal = {persona?:PartnerPersonaRevision;themes?:PartnerThemeRevision[];resolves?:string[]};
+export type PartnerMaintenanceCandidate = {id:string;partnerId:string;bookId:string;usageId?:string;proposal:unknown;reason:string;createdAt:number};
+export type ModelEffort = 'low' | 'medium' | 'high' | 'max';
+export type ModelParameterPatch = Partial<Pick<Service, 'effort' | 'maxOutput' | 'contextLimit'>> & {temperature?:number|null;topP?:number|null};
 export type Service = {
+  binding?:true;
   id: string; name: string; baseUrl: string; model: string; contextLimit: number;
-  effort: 'medium' | 'high'; maxOutput: number; enabled: boolean; secretRef: string;
+  effort: ModelEffort; maxOutput: number; enabled: boolean; secretRef: string;
+  temperature?:number; topP?:number;
   inputPrice?: number; outputPrice?: number; fallback: boolean;
   thinking?: 'deepseek' | 'none';
+  providerCapabilities?: import('./provider-capabilities.ts').ProviderCapabilities;
 };
 export type ReadingOutputFailure='missing-reading-body'|'invalid-reading-json'|'invalid-reading-fields'|'reading-output-length';
 export type ModelOutcome={kind:'invalid-output'|'cap-stop';reason:string;feedbackReason?:ReadingOutputFailure;jsonParseError?:string;lengthRepair?:{model:string;maxOutput:number};reasoningOnlyLength?:{model:string;maxOutput:number}}|{kind:'settlement-pending';reason:string};
+/** Safe admission metadata; raw errors, payloads and credentials stay private. */
+export interface ModelDispatchFailure {
+  category:'budget'|'concurrency'|'lock'|'configuration'|'integrity'|'authentication'|'internal';
+  code:string;
+  status?:number;
+  stage:'configuration-read'|'configuration-validation'|'request-validation'|'ledger-admission'|'ledger-read'|'lock-acquisition'|'lock-release'|'integrity-validation'|'budget-admission'|'ledger-write'|'ledger-transaction'|'receipt-validation';
+  errorName?:'Error'|'SyntaxError'|'TypeError'|'RangeError';
+  recovery:'condition-change'|'explicit'|'receipt';
+  blockerRequestIds?:readonly string[];
+}
 export type Usage = {
   sceneOpportunity?:SceneOpportunity;
   id: string; time: number; serviceId: string; purpose: string; input: number; output: number;
@@ -233,17 +328,32 @@ export type Usage = {
   queryPhase?:'main'|'receipt-repair';
   /** dispatch-started records a local attempt, never provider acceptance. */
   dispatchState?: 'not-dispatched' | 'dispatch-started' | 'response-received';
+  dispatchFailure?:ModelDispatchFailure;
+  /** Snapshot of the named blockers at rejection, for event-driven recovery. */
+  dispatchFailureCondition?:string;
+  providerAttempt?: {
+    previousRequestId?: string;
+    terminal?: import('./provider-capabilities.ts').ProviderTermination;
+    receipt?: import('./provider-capabilities.ts').ProviderReceipt;
+  };
   dispatchRole?: 'ordinary' | 'explicit-response';
   requestKey?: string;
   /** Core messages/tools identity; provider wire hashes use a separate scheme. */
   coreReadingPayload?:{scheme:'core-reading-messages-tools-v1';hash:string};
   /** One immutable actual maintenance dispatch; its body stays private and cold. */
   maintenanceDispatch?:MaintenanceDispatch;
+  /** Stable Harness task and model-attempt identity; never a new spending budget. */
+  agentSessionId?:string;
+  nativeSessionId?:string;
+  taskExecutionId?:string;
+  agentCallId?:string;
+  /** Settled raw response, retained privately until the Harness has consumed it. */
+  agentResponse?:{material?:AgentResponseMaterial;materialRef?:TaskMaterialRef};
   /** Host-certified completed result recovered without a new dispatch. */
   hostQueryReceipt?:{inputHash:string;nativeRequestHash:string;acceptedHash:string;resultHash:string;previousStatus:Usage['status']};
   modelOutcome?:ModelOutcome;
   /** Domain task failure tied to this actual call; provider settlement is unchanged. */
-  readingTaskFailure?:{role:'scene';reason:string;kind?:'save-failed'|'source-invalid'|'invalid-output'};
+  readingTaskFailure?:{role:'scene';reason:string;kind?:'save-failed'|'source-invalid'|'invalid-output';disposition?:'history'};
   /** Audit only. Loading this record never restores continuation authority. */
   terminatedReadingContinuation?:import('./terminated-reading-continuation.ts').ReadingContinuationAudit;
   elapsedMs?: number;
@@ -265,16 +375,22 @@ export type FactReviewTask = {
     reviewSources?: { fingerprint: string; sources: { id: string; evidence: Evidence }[] } }[];
 };
 export type Settings = {
+  language?:'zh-CN'|'en';
   serviceId: string; services: Service[]; tokenLimit: number; costLimit?: number;
   costBudgetId?: string; costBudgetStartedAt?: number;
   searchEnabled: boolean; searchEndpoint: string; searchSecretRef: string;
   searchProvider?: 'searxng' | 'tavily' | 'exa';
   minReadChars: number; minReactionMs: number; defaultQuiet: boolean;
-  readingEffort?: 'medium' | 'high';
+  readingEffort?: ModelEffort;
 };
 export type State = {
+  /** Fixed archive creation boundary for message visibility; never advanced by reads or new sessions. */
+  publicationTrackingStartedAt?:number;
   schema: 1; books: Book[]; memories: Memory[]; chats: Chat[]; conversations: Conversation[];
   partners: Partner[]; partnerId: string; usage: Usage[]; settings: Settings;
+  partnerPersonaVersions?:PartnerPersonaVersion[];
+  partnerThemes?:PartnerThemeVersion[];
+  partnerMaintenanceCandidates?:PartnerMaintenanceCandidate[];
   forgotten: { id: string; bookId: string; text: string; time: number; chatIds?: string[] }[];
   resume?: { bookId: string; conversationId: string; quiet?: boolean };
   transcriptRevisions?: TranscriptRevision[];
@@ -292,21 +408,32 @@ export type State = {
   publishedViews?:PublishedView[];
   viewPublications?:ViewPublication[];
   maintenanceJobs?:MaintenanceJob[];
+  /** Private resumable agent histories, excluded from UI and retrieval projections. */
+  agentSessions?:AgentSessionRecord[];
 };
+export type AgentSessionMaterial={kind:'agent-session-v1';snapshot:import('./agent-port.ts').AgentSessionSnapshot;material:QueryMaterial;dependencyStamp:string;migrationSource?:import('./agent-port.ts').AgentSessionSnapshot;spillBodies?:AgentSessionSpillBody[];inheritedMaterial?:ReadingDraftMaterial;delegatedResult?:{operation:import('./agent-port.ts').AgentOperation;result:import('./agent-port.ts').AgentDelegatedResult}};
+export type DomainOperationReceipt={operation:import('./agent-port.ts').AgentOperation;submissionHash:string;at:number;acceptance:import('./reading-output.ts').ReadingAcceptance<ReadingReply>;readingId?:string;memoryIds?:string[];viewIds?:string[];chatIds?:string[];factReview?:{taskId:string;memoryId:string;result:import('./fact-review.ts').ReviewedFact[];revisionId?:string}};
+export type AgentResponseMaterial={kind:'agent-response-v1';response:ModelReply|AgentModelReply;operations?:DomainOperationReceipt[]};
+export type AgentSessionRecord={id:string;bookId:string;version:string;partnerId:string;taskKey:string;status:'open'|'complete'|'invalidated';createdAt:number;updatedAt:number;material?:AgentSessionMaterial;materialRef?:TaskMaterialRef;native?:import('./agent-port.ts').NativeSessionReference;nativeImportPending?:true;nativeSessionId?:string;nativeStartEventCount?:number;conversationId?:string;contextRole?:'main'|'branch';inheritedFrom?:{parentSessionId:string;eventCount:number};invalidation?:{reason:'permission'|'correction'|'forgotten'|'source'|'not-dispatched';at:number};previousSessionId?:string;delegation?:import('./agent-port.ts').AgentDelegationRecord};
 export type ViewKind='overview'|'current'|'topic'|'arc';
-export type PublishedView={id:string;bookId:string;version:string;partnerId:string;kind:ViewKind;key:string;text:string;createdAt:number;previousId?:string;mergePreviousIds?:string[];memorySources:{id:string;hash:string}[];adoptedMemorySources?:{id:string;hash:string}[];originalSources:{evidence:Evidence;hash:string}[];viewSources:string[];evidence:Evidence[];contextChatIds:string[];ranges:Range[];chatIds:string[]};
-export type ViewPublication={id:string;bookId:string;version:string;partnerId:string;revision:number;viewIds:string[]};
-export type ViewProposal={operation?:'publish'|'keep';kind:ViewKind;key:string;text?:string;sourceMemoryIds:string[];sourceIds?:string[];chatIds?:string[];sourceViewIds?:string[];previousId?:string;mergePreviousIds?:string[]};
+export type PublishedView={formationSources?:FormationSources;writeBaseIds?:string[];scope?:'book'|'partner';id:string;bookId:string;version:string;partnerId:string;kind:ViewKind;key:string;text:string;createdAt:number;previousId?:string;mergePreviousIds?:string[];memorySources:{id:string;hash:string}[];adoptedMemorySources?:{id:string;hash:string}[];reviewedMemorySources?:{id:string;hash:string}[];reviewReason?:string;originalSources:{evidence:Evidence;hash:string}[];viewSources:string[];evidence:Evidence[];contextChatIds:string[];ranges:Range[];chatIds:string[]};
+export type ViewPublication={scope?:'book'|'partner';id:string;bookId:string;version:string;partnerId:string;revision:number;viewIds:string[]};
+export type ViewProposal={operation?:'publish'|'keep'|'revise';kind:ViewKind;key:string;text?:string;edits?:{oldText:string;newText:string}[];sourceMemoryIds:string[];reviewedMemoryIds?:string[];reviewChanges?:true;replaceSources?:true;reviewReason?:string;dropSourceMemoryIds?:string[];sourceIds?:string[];chatIds?:string[];sourceViewIds?:string[];previousId?:string;mergePreviousIds?:string[]};
 export type MaintenanceViewTarget='overview'|'current'|`view:${string}`;
 export function isMaintenanceViewTarget(value:unknown):value is MaintenanceViewTarget{return value==='overview'||value==='current'||typeof value==='string'&&value.startsWith('view:')&&value.length>5&&value.length<=133;}
 export function canonicalMaintenanceViewTargets(values:readonly MaintenanceViewTarget[]):MaintenanceViewTarget[]{
   if(!Array.isArray(values)||values.some(value=>!isMaintenanceViewTarget(value)))throw Error('维护概要目标身份无效');
   return [...(['overview','current'] as const).filter(kind=>values.includes(kind)),...new Set(values.filter((value):value is `view:${string}`=>value.startsWith('view:')).sort())];
 }
-export type MaintenanceJob={id:string;bookId:string;version:string;partnerId:string;ranges:Range[];viewReviewRanges?:Range[];chatIds:string[];viewTargets?:MaintenanceViewTarget[];sceneRecordIds?:string[];status:'pending'|'running'|'blocked';createdAt:number;reason?:string;draftId?:string;pendingDispatch?:{usageId:string}};
+export type MaintenanceJob={scope?:'book';id:string;bookId:string;version:string;partnerId:string;origin?:'reading-event';ranges:Range[];viewReviewRanges?:Range[];chatIds:string[];viewTargets?:MaintenanceViewTarget[];sceneRecordIds?:string[];status:'pending'|'running'|'paused'|'blocked';createdAt:number;reason?:string;draftId?:string;pendingDispatch?:{usageId:string};dismissed?:{at:number}};
 export type MaintenanceClaim={hash:string;viewReviewVersion?:1;ranges:Range[];viewReviewRanges?:Range[];chatIds:string[];viewTargets:MaintenanceViewTarget[];sceneRecordIds?:string[]};
 export type MaintenanceDispatchMaterial={kind:'maintenance-dispatch-v1';material:QueryMaterial;payload:{messages:ModelMessage[];tools:ModelTool[]};terminalResponse?:ModelReply};
-export type MaintenanceDispatch={payloadScheme:'core-reading-messages-tools-v1';payloadHash:string;request:ReadingDraftRequest;claim:MaintenanceClaim;dependencyStamp:string;material?:MaintenanceDispatchMaterial;materialRef?:TaskMaterialRef;committed?:{at:number;draftId?:string;readingId?:string;memoryIds:string[];viewIds:string[];publicationId?:string}};
+export type MaintenanceProcessed={ranges:Range[];chatIds:string[];sceneRecordIds?:string[];viewTargets:MaintenanceViewTarget[];viewReviewRanges?:Range[]};
+export type MaintenanceProgressReceipt={operationKey:string;at:number;memoryIds:string[];viewIds:string[];documents?:{index:number;hash:string;memoryId?:string}[];views?:{index:number;hash:string;viewIds:string[]}[];processed:MaintenanceProcessed};
+/** committed settles one complete execution; processed is its exact subset.
+ * Remaining overview work stays in the same MaintenanceJob. Legacy receipts
+ * without processed retain their original whole-claim completion meaning. */
+export type MaintenanceDispatch={progress?:MaintenanceProgressReceipt[];payloadScheme:'core-reading-messages-tools-v1';payloadHash:string;request:ReadingDraftRequest;claim:MaintenanceClaim;dependencyStamp:string;material?:MaintenanceDispatchMaterial;materialRef?:TaskMaterialRef;committed?:{at:number;draftId?:string;readingId?:string;memoryIds:string[];viewIds:string[];publicationId?:string;processed?:MaintenanceProcessed}};
 export type TerminatedMaintenanceResume={jobId:string;continuation:import('./terminated-reading-continuation.ts').TerminatedReadingContinuation;legacyDispatch?:{dispatch:MaintenanceDispatch;legacyMaterialEvidence:string}};
 export type Session = {
   id: string; bookId: string; generation: number; quiet: boolean; active: boolean;
@@ -322,27 +449,45 @@ export type ModelToolCall = { id: string; type: 'function'; function: { name: st
 export type ModelTool = { name: string; description: string; parameters: Record<string, unknown> };
 export type ModelMessage = { role: 'system' | 'user' | 'assistant' | 'tool'; content: string; tool_calls?: ModelToolCall[]; tool_call_id?: string; reasoning_content?: string };
 export type ModelReply = { content: string; input: number; output: number; estimated: boolean; elapsedMs: number;
+  providerReceipt?: import('./provider-capabilities.ts').ProviderReceipt;
   /** Untouched terminal carrier for diagnosis/feedback only; partial tools never execute. */
   rawTerminal?:{finishReason:string;message:Record<string,unknown>;usage:Record<string,unknown>;requestPolicy:{model:string;maxOutput:number}};
 };
 export type AgentModelReply = ModelReply & { requestId?:string; reasoning: string; toolCalls: ModelToolCall[]; finish: 'stop' | 'tool_calls' };
-export type ModelRequestIdentity={requestId:string;dispatchRole?:'ordinary'|'explicit-response'};
+export type ModelRequestIdentity={requestId:string;dispatchRole?:'ordinary'|'explicit-response';onStream?:import('./provider-stream.ts').ModelStreamObserver};
 export type ModelPort = {
+  tokenBudgetAuthority?:'provider-ledger';
   complete(service: Service, messages: ModelMessage[], signal: AbortSignal, request?: ModelRequestIdentity): Promise<ModelReply>;
   completeTools?(service: Service, messages: ModelMessage[], tools: ModelTool[], signal: AbortSignal, request?: ModelRequestIdentity): Promise<AgentModelReply>;
   /** Read an already completed host receipt. This method never dispatches a model. */
-  readQueryReceipt?(requestId:string):Promise<QueryHostReceipt>;
+  readQueryReceipt?(requestId:string,receivedResponse?:ModelReply):Promise<QueryHostReceipt>;
+  /** Explicitly fence an unresolved local attempt. Never invokes a model. */
+  closeReadingAttempt?(input:CloseReadingAttemptInput):Promise<CloseReadingAttemptResult>;
 };
-export type QueryHostReceipt={requestId:string;inputHash:string;response:ModelReply|AgentModelReply;certificate:{nativeRequestHash:string;acceptedHash:string;resultHash:string};termination?:never;outcome?:Exclude<ModelOutcome,{kind:'settlement-pending'}>;payload?:{messages:ModelMessage[];tools:ModelTool[]};material?:QueryMaterial;dependencyStamp?:string;legacyMaterialEvidence?:string}|{
- requestId:string;inputHash:string;termination:{serviceId:string;hostPayloadHash:string;terminationEvidence:string;payloadEvidence:string};response?:never;certificate?:never;outcome?:never;payload?:never;material?:never;dependencyStamp?:never;legacyMaterialEvidence?:never;
+export type ReadingAttemptReservation={inputTokens:number;outputTokens:number;totalTokens:number};
+export type CloseReadingAttemptInput={requestId:string;serviceId:string;inputHash:string;payload:{messages:ModelMessage[];tools:ModelTool[]};reservation:ReadingAttemptReservation};
+export type LocalAttemptFenceIdentity={cohortId:string;protocolSHA:string;closedAt:string;fenceSHA:string};
+export type LocalAttemptFenceTermination=LocalAttemptFenceIdentity&{kind:'local-attempt-fence';serviceId:string;providerOutcome:'unknown';terminationEvidence:string;payloadEvidence:string};
+export type ReadingAttemptTermination={kind?:never;serviceId:string;hostPayloadHash:string;terminationEvidence:string;payloadEvidence:string}|LocalAttemptFenceTermination;
+export type CloseReadingAttemptResult=QueryHostReceipt|{kind:'processing';requestId:string};
+export type QueryHostReceipt={requestId:string;inputHash:string;response:ModelReply|AgentModelReply;certificate:{nativeRequestHash:string;acceptedHash:string;resultHash:string;transport?:'subagent-test'};termination?:never;providerTermination?:never;providerReceipt?:never;outcome?:Exclude<ModelOutcome,{kind:'settlement-pending'}>;payload?:{messages:ModelMessage[];tools:ModelTool[]};material?:QueryMaterial;dependencyStamp?:string;legacyMaterialEvidence?:string}|{
+ requestId:string;inputHash:string;termination:ReadingAttemptTermination;providerTermination?:never;providerReceipt?:never;response?:never;certificate?:never;outcome?:never;payload?:never;material?:never;dependencyStamp?:never;legacyMaterialEvidence?:never;
+}|{
+ requestId:string;inputHash:string;providerTermination:import('./provider-capabilities.ts').ProviderTermination;providerReceipt:import('./provider-capabilities.ts').ProviderReceipt;response?:never;certificate?:never;termination?:never;outcome?:never;payload?:never;material?:never;dependencyStamp?:never;legacyMaterialEvidence?:never;
 };
 export type Store = {
   load(): Promise<State | undefined>; save(state: State): Promise<void>;
+  readPartnerAvatar?(id:string):Promise<PartnerAvatarAsset|undefined>;
+  writePartnerAvatar?(asset:PartnerAvatarAsset):Promise<void>;
   /** Atomic domain changes, not a diff of an entire State. Bodies are written
    * before their references become visible. Failure preserves the previous head. */
-  applyChanges?(changes: StateChangeSet): Promise<void>;
+  applyChanges?(changes: StateChangeSet): Promise<void|StorageCommitReceipt>;
   /** Immutable, verified private task bodies. Never exposed through UI snapshots. */
   readTaskMaterials?(refs: readonly TaskMaterialRef[]): Promise<TaskMaterialBody[]>;
+  /** Read the authoritative DSH log for an explicit recovery or complete backup. */
+  readNativeAgentSession?(reference:import('./agent-port.ts').NativeSessionReference):Promise<import('./agent-port.ts').AgentSessionSnapshot>;
+  readNativeConversationCheckpoint?(reference:import('./agent-port.ts').NativeSessionReference):Promise<{summary:string;summarySeq:number}|undefined>;
+  readNativeAgentSpills?(reference:import('./agent-port.ts').NativeSessionReference):AsyncIterable<Omit<AgentSessionSpillBody,'text'>&{text:AsyncIterable<string>}>;
   /** Absolute UTF-16 coordinates. Each returned piece must equal the requested
    * range; the immutable version/length are checked before it is used. */
   readBookRanges?(version:string,ranges:readonly Range[]):Promise<BookRangeResult>;
@@ -360,14 +505,21 @@ export type BookRangeResult={version:string;length:number;pieces:(Range&{text:st
 export type BookTextQuery={query:string;ranges:Range[];mode:'literal'|'normalized';limit:number;cursor?:string};
 export type BookTextMatches={version:string;ranges:Range[];exhausted:boolean;nextCursor?:string};
 export type TaskMaterialRef={key:string;hash:string;bytes:number};
-export type TaskMaterialBody={key:string;hash:string;value:ReadingDraftMaterial|QueryMaterial|MaintenanceDispatchMaterial};
-export type StoredCollectionRecord<K extends StateCollection>=K extends 'readingDrafts'|'companionReadingReceipts'
+/** Storage-only event segments; domain readers receive a complete native snapshot. */
+export type AgentSessionEventChunk={kind:'agent-session-events-v1';sessionId:string;start:number;events:unknown[];previous?:TaskMaterialRef};
+export type AgentSessionManifest={kind:'agent-session-manifest-v1';header:unknown;eventCount:number;tail?:TaskMaterialRef;sources:TaskMaterialRef;dependencyStamp:string;migrationSourceRef?:TaskMaterialRef;spillBodyRefs?:TaskMaterialRef[];inheritedMaterialRef?:TaskMaterialRef;delegatedResult?:AgentSessionMaterial['delegatedResult']};
+export type AgentSessionMigrationSource={kind:'agent-session-migration-source-v1';snapshot:import('./agent-port.ts').AgentSessionSnapshot};
+export type AgentSessionSpillBody={kind:'agent-session-spill-v1';locator:string;hash:string;bytes:number;text:string};
+export type TaskMaterialBody={key:string;hash:string;value:ReadingDraftMaterial|QueryMaterial|MaintenanceDispatchMaterial|AgentSessionMaterial|AgentResponseMaterial|AgentSessionEventChunk|AgentSessionManifest|AgentSessionMigrationSource|AgentSessionSpillBody};
+export type StoredCollectionRecord<K extends StateCollection>=K extends 'readingDrafts'|'companionReadingReceipts'|'agentSessions'
   ?Omit<StateCollectionRecord<K>,'material'>&{materialRef:TaskMaterialRef}
   :K extends 'queryCheckpoints'?Omit<QueryCheckpoint,'material'|'pendingReceipt'>&{materialRef?:TaskMaterialRef;pendingReceipt?:Omit<NonNullable<QueryCheckpoint['pendingReceipt']>,'material'>&{materialRef:TaskMaterialRef}}
-  :K extends 'usage'?Omit<Usage,'maintenanceDispatch'>&{maintenanceDispatch?:Omit<MaintenanceDispatch,'material'>&{materialRef:TaskMaterialRef}}
+  :K extends 'usage'?Omit<Usage,'maintenanceDispatch'|'agentResponse'>&{maintenanceDispatch?:Omit<MaintenanceDispatch,'material'>&{materialRef:TaskMaterialRef};agentResponse?:{materialRef:TaskMaterialRef}}
   :StateCollectionRecord<K>;
 export type StoredStateChangeSet=Omit<StateChangeSet,'collections'>&{collections:{[K in StateCollection]?:{put?:StoredCollectionRecord<K>[];remove?:string[]}}};
-export const stateCollections=['books','memories','chats','conversations','partners','usage','forgotten','transcriptRevisions','habits','tasks','readings','readingDrafts','queryCheckpoints','entityRoots','companionWorkspaces','companionReadingReceipts','companionCorrectionRepairs','publishedViews','viewPublications','maintenanceJobs'] as const;
+/** Returned only after the authoritative transaction committed these refs. */
+export type StorageCommitReceipt={id:string;collections:StoredStateChangeSet['collections']};
+export const stateCollections=['books','memories','chats','conversations','partners','partnerPersonaVersions','partnerThemes','partnerMaintenanceCandidates','usage','forgotten','transcriptRevisions','habits','tasks','readings','readingDrafts','queryCheckpoints','entityRoots','companionWorkspaces','companionReadingReceipts','companionCorrectionRepairs','publishedViews','viewPublications','maintenanceJobs','agentSessions'] as const;
 export type StateCollection=typeof stateCollections[number];
 export type StateCollectionRecord<K extends StateCollection>=NonNullable<State[K]>[number];
 export type StateChangeSet={
@@ -386,7 +538,7 @@ export function stateRecordKey(collection:StateCollection,value:StateCollectionR
   }
   return (value as {id:string}).id;
 }
-export type Understanding = WorldNote & SemanticNoteProposal & { kind: Exclude<MemoryKind,'context'|'stage'|'state'|'arc'>; text: string; documentTitle?:string; navigationCues?:string[]; knowledgeDistribution?:import('./knowledge-distribution.ts').KnowledgeDistribution; documentOperation?:'create'|'develop'|'revise';edits?:DocumentEdit[];appendText?:string; basis?: MemoryBasis; updates?: string; updateReason?: string; answersPartOf?: string; quote?: string; quoteSource?: string; sourceIds?: string[]; narrative?: NarrativeNote };
+export type Understanding = WorldNote & SemanticNoteProposal & { scope?:'book'|'partner'; kind: Exclude<MemoryKind,'context'|'stage'|'state'|'arc'>; text: string; organization?:import('./document-organization.ts').DocumentOrganization; documentTitle?:string; navigationCues?:string[]; knowledgeDistribution?:import('./knowledge-distribution.ts').KnowledgeDistribution; documentOperation?:DocumentOperation;replacementIds?:string[];edits?:DocumentEdit[];appendText?:string; basis?: MemoryBasis; updates?: string; mergePreviousIds?:string[]; updateReason?: string; answersPartOf?: string; quote?: string; quoteSource?: string; sourceIds?: string[]; narrative?: NarrativeNote };
 export type MemoryQuery = { query?: string; kind?: MemoryKind; offset?: number; chapterIndex?: number; ids?:string[]; entityIds?:string[];relations?:true;worldView?:'current'|'history';stateView?: 'current' | 'history'; arcView?:'current'|'history'; view?: 'index' | 'full' };
 export type OriginalHistoryQuery = { query:string; range?:Range; order?:'source-asc'|'source-desc'|'relevance'; cursor?:string };
 export function parseOriginalHistoryQuery(value:unknown):OriginalHistoryQuery {
@@ -398,9 +550,25 @@ export function parseOriginalHistoryQuery(value:unknown):OriginalHistoryQuery {
 export type OpinionIndexNavigation={currentUnderstanding?:Pick<Memory,'id'|'text'>};
 export type OrdinaryMemoryIndex={id:string;kind:MemoryKind;readingStage?:Range[];history?:true;origin?:'background';currentAlreadyProvided?:true;match?:{textStart:number;textEnd:number;text:string}};
 export type DiscussionQuery = { query?: string; offset?: number; chatId?: string; textStart?: number };
-export type ReadingReply = { quiet?:true; sceneInsight?:SceneInsight; views?:ViewProposal[]; paragraphComments?:import('./paragraph-comments.ts').ParagraphCommentProposal[]; reaction?:import('./paragraph-comments.ts').ReadingExpression; reply: string; thoughts: Understanding[]; wantsLong: boolean; workspace?: { understanding?: string; focus?: string[]; working?:string[] }; readingBrief?: string; stageNarrative?: StageNarrativeReply; stateUpdates?: StateUpdate[]; arcUpdates?:ArcUpdate[];entityRoots?:EntityRootProposal[]; search?: string; lookup?: string; lookupHistory?:OriginalHistoryQuery; recall?: MemoryQuery; history?: DiscussionQuery; read?: Range; readPage?: string; title?: string; replyBasis?: MemoryBasis; reinforce?: string[] };
+export type ReadingReply = { partnerMaintenance?:PartnerMaintenanceProposal; partnerMaintenanceIssue?:{reason:string;proposal:unknown}; quiet?:true; sceneInsight?:SceneInsight; views?:ViewProposal[]; paragraphComments?:import('./paragraph-comments.ts').ParagraphCommentProposal[]; reaction?:import('./paragraph-comments.ts').ReadingExpression; reply: string; thoughts: Understanding[]; wantsLong: boolean; workspace?: { understanding?: string; focus?: string[]; working?:string[] }; readingBrief?: string; stageNarrative?: StageNarrativeReply; stateUpdates?: StateUpdate[]; arcUpdates?:ArcUpdate[];entityRoots?:EntityRootProposal[]; search?: string; lookup?: string; lookupHistory?:OriginalHistoryQuery; recall?: MemoryQuery; history?: DiscussionQuery; read?: Range; readPage?: string; title?: string; replyBasis?: MemoryBasis; reinforce?: string[] };
 export type ReadingDraftRequest = { source: ReadingRecord['source']; ranges: Range[]; input: string; resumeId?: string; correctionRepairId?:string;maintenanceJobId?:string;maintenanceClaim?:string;sceneCommentIds?:string[];sceneOpportunity?:SceneOpportunity };
 export type ReadingDraftMaterial = {
+  /** Real published/user messages actually supplied, independent of maintenance. */
+  conversationInputChatIds?:string[];
+  /** Stable old p-label coordinates, without copying their original bodies. */
+  conversationPassageRefs?:Array<[string,Evidence]>;
+  /** Exact stable instructions captured by this task, restored with its persona. */
+  systemMessages?:ModelMessage[];
+  partnerPersona?:PartnerPersonaSnapshot;
+  partnerThemeVersionIds?:string[];
+  partnerThemeReadIds?:string[];
+  partnerMaintenanceCandidateIds?:string[];
+  documentCandidate?:import('./reading-candidate.ts').ReadingDocumentCandidate;
+  /** Receipt metadata for the actual dispatched surface; no copied request bodies. */
+  exposures?:import('./material-projection.ts').MaterialExposureReceipt[];
+  /** Indirect sources of a received child conclusion. These grant no full-body
+   * exposure or document-update permission to the parent task. */
+  delegatedSources?:{agentSessionId:string;resultRef:string;memoryIds:string[];viewIds:string[];chatIds:string[];originalRanges:Range[]}[];
   taskRole?:'scene'|'maintenance';
   sceneCommentIds?:string[];
   sceneOpportunity?:SceneOpportunity;
@@ -411,6 +579,8 @@ export type ReadingDraftMaterial = {
   maintenanceViewTargets?:MaintenanceViewTarget[];
   maintenanceReviewRanges?:Range[];
   maintenanceReviewMemoryIds?:string[];
+  /** New bounded source batches; absent legacy material keeps whole-target semantics. */
+  maintenanceReviewBatch?:true;
   partialMemoryIds?:string[];
   expressionContract?:'paragraph-expressions-v1';
   historicalCommentIds?:string[];
@@ -426,6 +596,7 @@ export type ReadingDraftMaterial = {
   basisStampVersion?:1;
   /** Body identity is independent of its current residency or storage key. */
   sourceStampVersion?:2;
+  dependencyStampVersion?:3;
   messages: ModelMessage[]; refs: Evidence[]; originalRanges: Range[];
   /** Core task mode, preserved across switches; old drafts use legacy semantics. */
   narrativeMode?: NarrativeMode;
@@ -484,6 +655,7 @@ export type CompanionReadingReceipt = {
   status:'received'|'blocked'; createdAt:number; blockedReason?:string;
 };
 export type QueryCheckpoint = {
+  messageEmojiReactionReceipts?:{targetId:string;emoji:string;active:boolean}[];
   materialRef?:TaskMaterialRef;
   id:string;
   questionId:string;bookId:string;version:string;partnerId:string;questionStamp:string;

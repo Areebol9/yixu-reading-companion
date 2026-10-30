@@ -1,0 +1,70 @@
+# Explicit domain composition, following upstream sdk-minimal's standalone bundle.
+# No terminal, browser, unrestricted filesystem, default provider or startup Agent.
+- insert:
+    - {id: timer, name: '@deepseek-ai/cordis-plugin-timer'}
+    - {id: llm, name: '@deepseek-ai/dsh-llm'}
+    - {id: sessions, name: '@deepseek-ai/dsh-session'}
+    - {id: session-projection, name: '@deepseek-ai/dsh-session-projection'}
+    - id: session-persistence
+      name: '@deepseek-ai/dsh-session-persistence-jsonl'
+      config:
+        root: !!js dshHomePath('archives', process.env.YIXU_COMPANION_ARCHIVE_ID, 'sessions')
+    - {id: storage, name: '@deepseek-ai/dsh-storage'}
+    - id: storage-json
+      name: '@deepseek-ai/dsh-storage-json'
+      config:
+        root: !!js dshHomePath('archives', process.env.YIXU_COMPANION_ARCHIVE_ID, 'storages')
+    - id: storage-domain
+      name: '@deepseek-ai/dsh-storage-domain'
+      config: {backend: json}
+    - {id: workspace, name: '@deepseek-ai/dsh-workspace'}
+    - {id: working-directory, name: '@deepseek-ai/dsh-working-directory'}
+    - {id: filesystem, name: '@deepseek-ai/dsh-fs-local'}
+    - {id: subprocess, name: '@deepseek-ai/dsh-subprocess-local'}
+    - {id: sandbox-policy, name: '@deepseek-ai/dsh-sandbox-policy', config: {mode: read-only}}
+    - {id: sandbox, name: '@deepseek-ai/dsh-sandbox-local'}
+    - {id: ptc-runtime, name: '@deepseek-ai/dsh-ptc-runtime-node', config: {executionMode: per-call}}
+    - {id: workflow-engine, name: '@deepseek-ai/dsh-workflow-ptc'}
+    - {id: skill-registry, name: '@deepseek-ai/dsh-skill'}
+    - {id: session-query, name: '@deepseek-ai/dsh-session-query-sqlite', config: {openAt: never, path: ':memory:'}}
+    - {id: tools, name: '@deepseek-ai/dsh-tools'}
+    - id: system-prompt
+      name: '@deepseek-ai/dsh-system-prompt'
+      config: {includeHarnessIdentity: false, includeRuntimeContext: false, personaPrefix: ''}
+    - {id: agents, name: '@deepseek-ai/dsh-agent'}
+    - id: agent-loop
+      name: '@deepseek-ai/dsh-agent-loop'
+      # Local read preparation only; model-request admission remains domain-owned.
+      config: {agents: [], maxParallelToolCalls: 2}
+    - {id: token-meter, name: '@deepseek-ai/dsh-token-meter'}
+    - {id: compaction-basic, name: '@deepseek-ai/dsh-compaction-basic', config: {auto: false}}
+    - {id: jobs, name: '@deepseek-ai/dsh-jobs-local'}
+    - {id: goal, name: '@deepseek-ai/dsh-goal'}
+    - {id: goal-round-driver, name: '@deepseek-ai/dsh-goal-round-driver'}
+    - {id: subagent, name: '@deepseek-ai/dsh-subagent'}
+    - {id: subagent-spawn, name: '@deepseek-ai/dsh-subagent-spawn-in-process'}
+    - {id: subagent-fork, name: '@deepseek-ai/dsh-subagent-fork-in-process'}
+    - id: presets
+      name: '@deepseek-ai/dsh-agent-preset-registry'
+      config: {default: companion}
+    - id: companion-preset
+      name: '@deepseek-ai/dsh-agent-preset'
+      config: {id: companion, plugins: []}
+    - id: maintenance-preset
+      name: '@deepseek-ai/dsh-agent-preset'
+      config: {id: companion-maintenance, plugins: []}
+    - id: review-preset
+      name: '@deepseek-ai/dsh-agent-preset'
+      config: {id: companion-review, plugins: []}
+    - id: preparation-preset
+      name: '@deepseek-ai/dsh-agent-preset'
+      config: {id: companion-preparation, plugins: []}
+    - id: companion-host
+      name: '@yixu/dsh-companion-host'
+      config:
+        dataRoot: !!js process.env.YIXU_COMPANION_DATA_ROOT
+        nativeHome: !!js process.env.DSH_HOME
+        archiveId: !!js process.env.YIXU_COMPANION_ARCHIVE_ID
+        domainModule: !!js process.env.YIXU_COMPANION_DOMAIN_MODULE
+        port: !!js Number(process.env.YIXU_COMPANION_HOST_PORT ?? 0)
+        origins: !!js JSON.parse(process.env.YIXU_COMPANION_ORIGINS ?? '[]')

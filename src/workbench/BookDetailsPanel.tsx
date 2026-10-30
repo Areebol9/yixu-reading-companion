@@ -1,0 +1,65 @@
+import { t, locale } from './i18n.ts';
+import {useEffect,useRef,useState} from 'react';
+import type {BookView} from '../core/application-contract.ts';
+import {bodyChapterCount} from '../core/book-versions.ts';
+import {decodeBook} from '../core/books.ts';
+import {Dialog} from './components.tsx';
+import type {BookProjectLocations} from '../host/contract.ts';
+import './book-directory.css';
+
+export function BookDetailsPanel({book,onRename,onExtend,onExtendFile,onRecognizeDirectory,onGetProjectLocations,onSetProjectDirectory,backgroundModelReady,onClose}:{book:BookView;onRename:(title:string)=>Promise<void>;onExtend:(raw:string)=>Promise<void>;onExtendFile?:(file:File)=>Promise<void>;onRecognizeDirectory:(useModel:boolean)=>Promise<void>;onGetProjectLocations:()=>Promise<BookProjectLocations>;onSetProjectDirectory:(directory:string)=>Promise<BookProjectLocations>;backgroundModelReady?:boolean;onClose:()=>void}){
+  const [title,setTitle]=useState(book.title),[saving,setSaving]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
+  const [recognizing,setRecognizing]=useState<'local'|'model'|undefined>();
+  const [locations,setLocations]=useState<BookProjectLocations>();
+  useEffect(()=>{let active=true;if(window.yixuDesktop)void onGetProjectLocations().then(value=>{if(active)setLocations(value);}).catch(reason=>{if(active)setError(reason instanceof Error?reason.message:String(reason));});return()=>{active=false;};},[book.id]);
+  const fileInput=useRef<HTMLInputElement>(null);
+  useEffect(()=>{setTitle(book.title);setError('');setNotice('');},[book.id,book.title]);
+  const count=bodyChapterCount(book);
+  async function save(action:()=>Promise<void>,success:string){
+    setSaving(true);setError('');setNotice('');
+    try{await action();setNotice(success);}catch(reason){setError(reason instanceof Error?reason.message:String(reason));}finally{setSaving(false);}
+  }
+  async function recognize(useModel:boolean){
+    setRecognizing(useModel?'model':'local');setError('');setNotice('');
+    try{await onRecognizeDirectory(useModel);setNotice(t("目录已更新，阅读位置和已有记录已保留。"));}catch(reason){setError(t("{0} 原目录已保留，可以稍后重新识别。",reason instanceof Error?reason.message:String(reason)));}finally{setRecognizing(undefined);}
+  }
+  async function changeProjectDirectory(){
+    try{
+      const selected=await window.yixuDesktop?.chooseProjectDirectory?.(locations?.rootDirectory);if(!selected)return;
+      await save(async()=>setLocations(await onSetProjectDirectory(selected)),t("书籍工程位置已更新，阅读与交流记录已保留。"));
+    }catch(reason){setError(reason instanceof Error?reason.message:String(reason));}
+  }
+  const project=locations?.projects.find(project=>project.bookId===book.id);
+  const folderName=project?.directory.split(/[\\/]/).filter(Boolean).at(-1);
+  const shortLocation=locations?.rootDirectory.split(/[\\/]/).filter(Boolean).slice(-3).join(' / ');
+  return <Dialog title={t("书籍信息")} onClose={onClose}><div className="book-details">
+    <form onSubmit={event=>{event.preventDefault();if(!saving&&title.trim()&&title.trim()!==book.title)void save(()=>onRename(title.trim()),t("书名已保存。"));}}>
+      <label className="form-field"><span>{t("书名")}</span><input aria-label={t("书名")} value={title} maxLength={200} disabled={saving} onChange={event=>setTitle(event.target.value)} /></label>
+      <button className="btn btn-outline btn-small" disabled={saving||!title.trim()||title.trim()===book.title}>{t("保存书名")}</button>
+    </form>
+    <section className="book-source-details" aria-label={t("当前正文")}><h3>{t("当前正文")}</h3><p>{count?t("{0} 章",count.toLocaleString(locale())):t("{0} 个目录项",book.chapters.length.toLocaleString(locale()))} · {book.textLength.toLocaleString(locale())} {t("字")}</p></section>
+    <section className="book-source-details" aria-label={t("书籍工程与原文")}><h3>{t("书籍工程")}</h3>
+      <p>{t("供 agents 使用的工作文件夹，与导入原文分开。")}</p>
+      {project&&<p><strong>{folderName}</strong></p>}
+      {locations&&<p className="form-hint">{t("存放位置：")}{shortLocation}</p>}
+      {project&&<details><summary>{t("查看完整路径")}</summary><p className="form-hint" style={{overflowWrap:'anywhere'}}>{project.directory}</p></details>}
+      <div className="book-directory-actions"><button type="button" className="btn btn-outline btn-small" disabled={saving||!window.yixuDesktop?.chooseProjectDirectory} onClick={()=>void changeProjectDirectory()}>{t("更改存放位置")}</button>{project&&<button type="button" className="btn btn-outline btn-small" onClick={()=>void window.yixuDesktop?.openProjectDirectory?.(project.directory).catch(reason=>setError(String(reason)))}>{t("打开文件夹")}</button>}</div>
+      <p className="form-hint">{t("更改位置会迁移当前阅读存档中已有的书籍工程，新加入的书籍也使用该位置。")}</p>
+      <h3>{t("导入原文")}</h3><p>{t("原文保存在应用书库中，作为阅读来源。选择工程文件夹不会把整本原文复制进去。")}</p>
+    </section>
+    <section className="book-source-details" aria-label={t("目录识别")}><h3>{t("目录")}</h3>
+      <p>{(book.directory?.entries.length??book.chapters.length).toLocaleString(locale())} {t("个目录项")}{book.directory?.unresolved?t(" · 还有标题有待确认"):book.directory?t(" · 已识别"):t(" · 可重新识别部、卷和章节层级")}</p>
+      <div className="book-directory-actions"><button type="button" className="btn btn-outline btn-small" disabled={saving||!!recognizing} onClick={()=>void recognize(false)}>{recognizing==='local'?t("正在整理目录…"):t("重新识别目录（本地）")}</button><button type="button" className="btn btn-outline btn-small" disabled={saving||!!recognizing||!backgroundModelReady} onClick={()=>void recognize(true)}>{recognizing==='model'?t("正在辅助识别…"):t("模型辅助识别")}</button></div>
+      <p className="book-directory-model-note">{t("本地识别可直接使用。模型辅助只发送候选标题和附近排版信息，使用后台已选模型，并产生模型用量。")}</p>
+      {!backgroundModelReady&&<p className="book-directory-model-note">{t("如需模型辅助，请先在设置中选择可用的后台模型。")}</p>}
+      {recognizing&&<p className="book-directory-progress" role="status">{recognizing==='model'?t("正在请后台模型确认标题与层级，阅读可以继续。"):t("正在从原文标题和排版整理目录，阅读可以继续。")}</p>}
+    </section>
+    <section className="book-source-details"><h3>{t("更新正文")}</h3><p>{t("选择包含后续章节的 TXT 文件。文件中已有的正文和章节顺序需与当前内容一致，更新后保留阅读位置、交流和伙伴资料。")}</p>
+      <button type="button" className="btn btn-outline btn-small" disabled={saving} onClick={()=>fileInput.current?.click()}>{t("选择 TXT 文件")}</button>
+      <input ref={fileInput} type="file" accept=".txt,text/plain" aria-label={t("选择更新正文的 TXT 文件")} disabled={saving} hidden onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)void save(()=>onExtendFile?onExtendFile(file):file.arrayBuffer().then(bytes=>onExtend(decodeBook(bytes))),t("正文已更新，已有阅读记录已保留。"));}} />
+    </section>
+    {saving&&<p className="form-hint" role="status">{t("正在保存书籍信息…")}</p>}
+    {notice&&<p className="form-hint" role="status">{notice}</p>}
+    {error&&<p className="callout amber" role="alert">{error}</p>}
+  </div></Dialog>;
+}

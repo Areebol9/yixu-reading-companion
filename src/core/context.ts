@@ -8,10 +8,12 @@ import { inputHabitValue, reconcileHabits } from './habits.ts';
 import {semanticReferenceIds} from './semantic-notes.ts';
 import {captureCorrectionRepairs,activateCorrectionRepairs} from './companion-correction-repair.ts';
 import {pruneCompanionWorkspaces} from './companion-workspace.ts';
+import {bookVersionAllowsRange} from './book-versions.ts';
 import {requireMemoryText} from './memory-bodies.ts';
+import {memoryReadableByPartner,sameDocumentOwner} from './book-document-ownership.ts';
 
 export class PermissionError extends Error {}
-type ReadingBoundary = Pick<Book, 'id' | 'version' | 'frontMatterEnd' | 'frontMatterIncluded'> & {
+type ReadingBoundary = Pick<Book, 'id' | 'version' | 'frontMatterEnd' | 'frontMatterIncluded'|'sourceLineage'> & {
   readonly known: readonly Readonly<Range>[];
   readonly text?: string;
   readonly textLength?: number;
@@ -55,18 +57,27 @@ export function assertReadable(book: Book, span: Range, extra: Range[] = []): vo
 }
 export function evidence(book: Book, span: Range): Evidence { return { ...span, bookId: book.id, version: book.version }; }
 /** Displaying real dialogue does not grant later material or maintenance use. */
-export function chatAllowsMemory(state:State,chat:Chat,seen=new Set<string>()):boolean{
+type ChatMemoryCheck={chats:Map<string,Chat>;books:Map<string,Book>;evidence:Map<string,ReturnType<typeof createEvidenceChecker>>;memo:Map<string,boolean>};
+/** One synchronous source check may visit the same paragraph parents repeatedly. */
+export function createChatMemoryChecker(state:State):(chat:Chat)=>boolean{
+  const check:ChatMemoryCheck={chats:new Map(state.chats.map(chat=>[chat.id,chat])),books:new Map(state.books.map(book=>[book.id,book])),evidence:new Map(),memo:new Map()};
+  return chat=>chatAllowsMemory(state,chat,new Set(),check);
+}
+export function chatAllowsMemory(state:State,chat:Chat,seen=new Set<string>(),check?:ChatMemoryCheck):boolean{
   if(chat.memoryAllowed===false||seen.has(chat.id))return false;
+  const known=check?.memo.get(chat.id);if(known!==undefined)return known;
   seen.add(chat.id);
   if(chat.presentation==='paragraph'){
-    const book=state.books.find(b=>b.id===chat.bookId);
-    if(!book||chat.excluded||chat.futureGrant||!chat.anchor||chat.anchor.version!==book.version||!isEvidenceAllowed(book,[chat.anchor,...chat.evidence]))return false;
+    const book=check?check.books.get(chat.bookId):state.books.find(b=>b.id===chat.bookId);
+    let allowed=book&&check?.evidence.get(book.id);if(book&&check&&!allowed){allowed=createEvidenceChecker(book);check.evidence.set(book.id,allowed);}
+    if(!book||chat.excluded||chat.futureGrant||!chat.anchor||!bookVersionAllowsRange(book,chat.anchor.version,chat.anchor)||!(allowed?allowed([chat.anchor,...chat.evidence]):isEvidenceAllowed(book,[chat.anchor,...chat.evidence])))return false;
     for(const parentId of new Set([chat.replyTo,chat.paragraphCommentId].filter((v):v is string=>!!v))){
-      const parent=state.chats.find(c=>c.id===parentId);
-      if(!parent||parent.presentation!=='paragraph'||parent.anchor?.start!==chat.anchor.start||parent.anchor.end!==chat.anchor.end||!chatAllowsMemory(state,parent,new Set(seen)))return false;
+      const parent=check?check.chats.get(parentId):state.chats.find(c=>c.id===parentId);
+      if(!parent||parent.presentation!=='paragraph'||parent.anchor?.start!==chat.anchor.start||parent.anchor.end!==chat.anchor.end||!chatAllowsMemory(state,parent,new Set(seen),check))return false;
     }
   }
-  return !chat.replyTo||state.chats.find(question=>question.id===chat.replyTo)?.memoryAllowed!==false;
+  const allowed=!chat.replyTo||(check?check.chats.get(chat.replyTo):state.chats.find(question=>question.id===chat.replyTo))?.memoryAllowed!==false;
+  check?.memo.set(chat.id,allowed);return allowed;
 }
 /** A read-only question may quote only the response explicitly selected by the user. */
 export function chatIsTaskSource(state:State,chat:Chat,question?:Chat):boolean{
@@ -82,7 +93,7 @@ export function memorySources(memory: Pick<Memory, 'sourceEvidence' | 'sourceQuo
 }
 /** Match an optional quote only within original text actually supplied this turn. */
 export function matchSourceQuote(book: Book, ranges: Range[], quote?: string): Memory['sourceQuote'] {
-  if (!quote || quote.length < 8 || quote.length > 200 || !hasBookText(book)) return;
+  if (!quote || quote.length < 8 || quote.length > 200 || !hasBookText(book)&&!book.residentRanges?.length) return;
   let found: number | undefined;
   for (const range of mergeRanges(ranges)) {
     if (!isEvidenceAllowed(book, [evidence(book, range)])) continue;
@@ -97,9 +108,18 @@ export function matchSourceQuote(book: Book, ranges: Range[], quote?: string): M
   if (found !== undefined) return { text: quote, evidence: evidence(book, { start: found, end: found + quote.length }) };
 }
 export function readText(book: Book, span: Range, extra: Range[] = []): string { assertReadable(book, span, extra); requireBookText(book); return bookTextSlice(book,span.start, span.end); }
+/** Capture a grant only for one synchronous check, never across state changes. */
+export function createEvidenceChecker(book:ReadingBoundary,extra:readonly Range[]=[]):(refs:readonly Readonly<Evidence>[])=>boolean{
+  const length=book.textLength??book.text?.length??0,bookId=book.id,version={version:book.version,textLength:length,sourceLineage:book.sourceLineage},allowed=readableRanges(book,extra),checked=new WeakMap<object,boolean>();
+  return refs=>{const known=checked.get(refs);if(known!==undefined)return known;
+    const valid=refs.length > 0 && refs.every(r => r.bookId === bookId && bookVersionAllowsRange(version,r.version,r) && r.end <= length &&
+    Number.isSafeInteger(r.start) && Number.isSafeInteger(r.end) && r.start >= 0 && r.end > r.start &&
+    allowed.some(span => span.start <= r.start && span.end >= r.end));
+    checked.set(refs,valid);return valid;
+  };
+}
 export function isEvidenceAllowed(book: ReadingBoundary, refs: readonly Readonly<Evidence>[], extra: readonly Range[] = []): boolean {
-  const length = book.textLength ?? book.text?.length ?? 0;
-  return refs.length > 0 && refs.every(r => r.bookId === book.id && r.version === book.version && r.end <= length && covers(readableRanges(book, extra), r));
+  return createEvidenceChecker(book,extra)(refs);
 }
 /** Unloaded records remain metadata candidates; exact text exclusion is rechecked after hydration. */
 export function memoryIsForgotten(state:State,memory:Memory):boolean {
@@ -107,7 +127,7 @@ export function memoryIsForgotten(state:State,memory:Memory):boolean {
 }
 export function usableMemories(state: State, book: Book, extra: Range[] = []): Memory[] {
   const versions = new Map(state.memories.map(m => [m.id,m]));
-  return state.memories.filter(m => isCurrentUnderstanding(m, versions.get(m.replacedBy ?? ''), book, extra) && m.bookId === book.id && m.partnerId === state.partnerId &&
+  return state.memories.filter(m => isCurrentUnderstanding(m, versions.get(m.replacedBy ?? ''), book, extra) && m.bookId === book.id && memoryReadableByPartner(state,m) &&
     isEvidenceAllowed(book, m.evidence, extra) && !memoryIsForgotten(state,m))
     .map(m=>{const question=m.answersPartOf&&currentQuestion(state,book,m.answersPartOf,extra,versions);
       return question&&question.id!==m.answersPartOf?{...m,answersPartOf:question.id}:m;});
@@ -117,31 +137,31 @@ export function usableMemories(state: State, book: Book, extra: Range[] = []): M
 export function currentQuestion(state:State,book:Book,memoryId:string,extra:Range[]=[],versions=new Map(state.memories.map(m=>[m.id,m]))):Memory|undefined{
   const seen=new Set<string>();let memory=versions.get(memoryId);
   while(memory&&!seen.has(memory.id)){
-    if(memory.kind!=='question'||memory.bookId!==book.id||memory.partnerId!==state.partnerId||memory.forgotten||
+    if(memory.kind!=='question'||memory.bookId!==book.id||!memoryReadableByPartner(state,memory)||memory.forgotten||
       !isEvidenceAllowed(book,memory.evidence,extra)||memoryIsForgotten(state,memory))return;
     if(isCurrentUnderstanding(memory,versions.get(memory.replacedBy??''),book,extra))return memory;
     seen.add(memory.id);const next=versions.get(memory.replacedBy??'');
-    if(!next||next.source!=='review'||next.kind!=='question'||next.reviewDisposition!=='supported'||typeof memory.text!=='string'||typeof next.text!=='string'||next.text!==memory.text)return;
+    if(!next||!sameDocumentOwner(memory,next)||next.source!=='review'||next.kind!=='question'||next.reviewDisposition!=='supported'||typeof memory.text!=='string'||typeof next.text!=='string'||next.text!==memory.text)return;
     memory=next;
   }
 }
-export function isCurrentMemory(memory: Pick<Memory, 'forgotten' | 'replacedBy' | 'invalidatedBy' | 'reviewDisposition'|'historicalOnly'>): boolean { return !memory.historicalOnly && !memory.forgotten && !memory.replacedBy && !memory.invalidatedBy && memory.reviewDisposition !== 'unsupported'; }
+export function isCurrentMemory(memory: Pick<Memory, 'forgotten' | 'replacedBy' | 'invalidatedBy' | 'reviewDisposition'|'historicalOnly'|'documentState'>): boolean { return memory.documentState!=='retired' && !memory.historicalOnly && !memory.forgotten && !memory.replacedBy && !memory.invalidatedBy && memory.reviewDisposition !== 'unsupported'; }
 /** A normal developed version remains an immutable source, even when a newer
  * interpretation is known. Error correction and forgetting do not. */
 export function isUsableSourceVersion(state:State,memory:Memory):boolean{
   return !memory.forgotten&&!memory.invalidatedBy&&memory.reviewDisposition!=='unsupported'&&(!memory.replacedBy||state.memories.find(m=>m.id===memory.replacedBy)?.revisionKind==='development');
 }
 export function isBackgroundMemory(memory:Pick<Memory,'source'|'backgroundOrigin'>):boolean{return memory.source==='background'||memory.backgroundOrigin===true;}
-type MemoryVersion = Pick<Memory, 'id' | 'forgotten' | 'replacedBy' | 'invalidatedBy' | 'reviewDisposition' | 'revisionKind'|'historicalOnly'> & { readonly evidence: readonly Readonly<Evidence>[] };
+type MemoryVersion = Pick<Memory, 'id' | 'forgotten' | 'replacedBy' | 'invalidatedBy' | 'reviewDisposition' | 'revisionKind'|'historicalOnly'|'documentState'> & { readonly evidence: readonly Readonly<Evidence>[] };
 export function isCurrentUnderstanding(memory: MemoryVersion, next: MemoryVersion | undefined, book: ReadingBoundary, extra: readonly Range[] = []): boolean {
-  return !memory.historicalOnly && (isCurrentMemory(memory) || !memory.forgotten && !memory.invalidatedBy && memory.reviewDisposition !== 'unsupported' && !!memory.replacedBy && memory.replacedBy === next?.id &&
+  return !memory.historicalOnly && memory.documentState!=='retired' && (isCurrentMemory(memory) || !memory.forgotten && !memory.invalidatedBy && memory.reviewDisposition !== 'unsupported' && !!memory.replacedBy && memory.replacedBy === next?.id &&
     next.revisionKind === 'development' && !isEvidenceAllowed(book, next.evidence, extra));
 }
 
 export function reconcileMemoryOrigins(state:State,memories=new Map(state.memories.map(m=>[m.id,m]))):void{
   for(const m of state.memories)if(['review','correction'].includes(m.source)&&!m.backgroundOrigin){
     const seen=new Set<string>();let previous=memories.get(m.correctionOf??'');
-    while(previous&&!seen.has(previous.id)&&previous.bookId===m.bookId&&previous.partnerId===m.partnerId){
+    while(previous&&!seen.has(previous.id)&&sameDocumentOwner(previous,m)){
       if(isBackgroundMemory(previous)){m.backgroundOrigin=true;break;}
       if(!['review','correction'].includes(previous.source))break;
       seen.add(previous.id);previous=memories.get(previous.correctionOf??'');
@@ -169,8 +189,10 @@ export function reconcileCorrections(state: State): void {
   const retracted = (memory: Memory | undefined) => memory?.invalidatedBy || (memory?.reviewDisposition==='unsupported'?memory.id:undefined) || (memory?.replacedBy && memories.get(memory.replacedBy)?.revisionKind !== 'development' ? memory.replacedBy : undefined);
   const chats = new Map(state.chats.map(c => [c.id, c]));
   for (const m of state.memories) {
-    const previous = m.correctionOf ? memories.get(m.correctionOf) : undefined;
-    if (previous?.replacedBy && previous.replacedBy !== m.id) m.invalidatedBy = previous.replacedBy;
+    for(const previousId of [...(m.correctionOf?[m.correctionOf]:[]),...(m.mergePreviousIds??[])]){
+      const previous=memories.get(previousId);
+      if(previous?.replacedBy&&previous.replacedBy!==m.id)m.invalidatedBy=previous.replacedBy;
+    }
     if (!m.replacedBy || memories.get(m.replacedBy)?.revisionKind === 'development') continue;
     const reason = m.replacedBy;
     // chatIds / basis.chatIds are inputs to this claim. Retracting a later
@@ -198,12 +220,12 @@ export function reconcileCorrections(state: State): void {
       for(const part of m.stateProjection?.parts??[])if(!part.memoryRef&&!part.sourceEvidence?.length){
         const visited=new Set<string>(),pending=[...m.parents];
         while(pending.length){const key=pending.pop()!;if(visited.has(key))continue;visited.add(key);const origin=memories.get(key);
-          if(!origin||origin.bookId!==m.bookId||origin.partnerId!==m.partnerId||isBackgroundMemory(origin)!==isBackgroundMemory(m))continue;
+          if(!origin||origin.bookId!==m.bookId||!sameDocumentOwner(origin,m)||isBackgroundMemory(origin)!==isBackgroundMemory(m))continue;
           if(origin.source==='correction'&&origin.stateProjection?.parts?.some(p=>p.id===part.id&&p.text===part.text&&!p.memoryRef&&!p.sourceEvidence?.length))manualParents.push(origin.id);
           pending.push(...origin.parents);
         }
       }
-      const parent = [...(m.basis?.memoryIds ?? m.parents),...semanticReferenceIds(m),...(m.stateProjection?.parts??[]).flatMap(p=>p.memoryRef?[p.memoryRef.memoryId]:[]),...manualParents].map(p => memories.get(p)).find(p => retracted(p));
+      const parent = [...(m.basis?.memoryIds ?? m.parents),...(m.writeBaseIds??[]),...semanticReferenceIds(m),...(m.stateProjection?.parts??[]).flatMap(p=>p.memoryRef?[p.memoryRef.memoryId]:[]),...manualParents].map(p => memories.get(p)).find(p => retracted(p));
       const chat = (m.basis?.chatIds ?? m.chatIds).map(c => chats.get(c)).find(c => c?.outdatedBy);
       const reason = retracted(parent) || chat?.outdatedBy;
       if (reason) { m.invalidatedBy = reason; changed = true; }
@@ -225,7 +247,7 @@ export function correctMemory(state: State, memoryId: string, text: string): Mem
   requireMemoryText(original);
   const value = original.kind==='opinion'?text:text.trim();
   const limit=memoryTextLimit(original.kind);
-  if (!value.trim() || value.length > limit) throw new Error(`更正内容请填写 1 至 ${limit} 个字符`);
+  if (!value.trim() || limit!==undefined&&value.length > limit) throw new Error(limit===undefined?'更正内容须为非空正文':`更正内容请填写 1 至 ${limit} 个字符`);
   if (value === original.text && original.reviewDisposition !== 'unsupported') return original;
   const repairs=captureCorrectionRepairs(state,original);
   const book = state.books.find(b => b.id === original.bookId);
@@ -234,7 +256,7 @@ export function correctMemory(state: State, memoryId: string, text: string): Mem
     ...original, id: id(), text: value, bodyRef:undefined, createdAt: Date.now(), source: 'correction',
     backgroundOrigin:isBackgroundMemory(original)?true:undefined,
     evidence: mergeRanges([...original.evidence, ...book.known]).map(r => evidence(book, r)),
-    correctionOf: original.id, parents: [], chatIds: [], webSources: undefined,
+    correctionOf: original.id, mergePreviousIds:undefined, parents: [], chatIds: [], webSources: undefined,
     replacedBy: undefined, invalidatedBy: undefined, basis: { memoryIds: [], chatIds: [] }, habitIds: undefined, reviewDisposition: undefined, reviewReason: undefined, revisionKind: undefined, revisionReason: undefined, documentRevision:undefined, sourceQuote: undefined, sourceEvidence: undefined, readingStage: undefined, answersPartOf: undefined, narrative: undefined,about:undefined,identityClaim:undefined,attribution:undefined,ruleLinks:undefined,worldChangeOf:undefined,entityBindings:undefined,temporal:undefined,clue:undefined
   };
   if(original.arcProjection)replacement.arcProjection={...original.arcProjection,parts:original.arcProjection.status==='ended'?[]:[{id:id(),text:value,role:'progress'}],...(original.arcProjection.status==='ended'?{end:{text:value,sourceEvidence:[]}}:{end:undefined})};
@@ -296,8 +318,8 @@ export function forgetMemory(state: State, memoryId: string): void {
   let changed = true;
   while (changed) {
     changed = false;
-    for (const item of state.memories) if (!removed.has(item.id) && (item.parents.some(id => removed.has(id)) ||semanticReferenceIds(item).some(id=>removed.has(id))||item.correctionRepairSources?.memoryIds.some(id=>removed.has(id))||item.correctionRepairSources?.chatIds.some(id=>chats.has(id))||
-      [...item.chatIds,...(item.historicalCommentIds??[])].some(id => chats.has(id)) || !!item.correctionOf && removed.has(item.correctionOf) || !!item.replacedBy && removed.has(item.replacedBy))) { removed.add(item.id); [...item.chatIds,...(item.historicalCommentIds??[])].forEach(id => chats.add(id)); changed = true; }
+    for (const item of state.memories) if (!removed.has(item.id) && ([...item.parents,...(item.formationSources?.memoryIds??[])].some(id => removed.has(id)) ||semanticReferenceIds(item).some(id=>removed.has(id))||item.correctionRepairSources?.memoryIds.some(id=>removed.has(id))||item.correctionRepairSources?.chatIds.some(id=>chats.has(id))||
+      [...item.chatIds,...(item.formationSources?.chatIds??[]),...(item.historicalCommentIds??[])].some(id => chats.has(id)) || !!item.correctionOf && removed.has(item.correctionOf) || !!item.replacedBy && removed.has(item.replacedBy))) { removed.add(item.id); [...item.chatIds,...(item.historicalCommentIds??[])].forEach(id => chats.add(id)); changed = true; }
     for (const chat of state.chats) if (!chats.has(chat.id) && (chat.memoryIds?.some(id => removed.has(id)) || [...(chat.contextChatIds??[]),...(chat.historicalCommentIds??[])].some(id => chats.has(id)) || !!chat.replyTo && chats.has(chat.replyTo))) { chats.add(chat.id); changed = true; }
   }
   const texts=new Map(state.memories.filter(item=>removed.has(item.id)).map(item=>[item.id,requireMemoryText(item)]));

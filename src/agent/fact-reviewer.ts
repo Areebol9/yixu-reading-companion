@@ -5,14 +5,13 @@ import { factReviewMessages, focusFactReview, parseFactReview } from '../core/fa
 import {stateProjectionMaterial,arcMaterial} from '../core/stage-materials.ts';
 import type { FactSource, ReviewedFact } from '../core/fact-review.ts';
 import type { AgentFactReviewer, AgentReviewRequest } from '../core/agent-review-port.ts';
-import { HarnessRuntime } from './runtime.ts';
+import type {AgentRunner} from '../core/agent-port.ts';
 import {reviewSourceMaterial} from './review-source-materials.ts';
 
 /** Fact review and co-reading share one application kernel and separate scoped tasks. */
 export class HarnessFactReviewer implements AgentFactReviewer {
-  private runtime: HarnessRuntime;
-  constructor(runtime = new HarnessRuntime()) { this.runtime = runtime; }
-  dispose(): Promise<void> { return this.runtime.dispose(); }
+  constructor(private readonly runtime:AgentRunner&{dispose?():Promise<void>},private readonly ownsRuntime=false){}
+  dispose(): Promise<void> { return this.ownsRuntime?this.runtime.dispose?.()??Promise.resolve():Promise.resolve(); }
   async review(input: AgentReviewRequest): Promise<ReviewedFact[]> {
     input.assertCurrent();
     const focused = focusFactReview(input.review);

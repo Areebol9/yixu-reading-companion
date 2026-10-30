@@ -42,11 +42,27 @@ export function knowledgeQueryMatch(value:KnowledgeDistribution|undefined,query:
   return bodyMatches(topic)&&bodyMatches(subject)?'body-fallback':undefined;
 }
 export type KnowledgeMaintenanceMatch={topics:string[];subjects:string[];scopeCues:string[];changeCues:string[]};
+/** One immutable reading surface can match many documents. Tokenize that same
+ * surface once; this matcher and its memo live only for its caller's operation. */
+export function knowledgeMaintenanceMatcher(newText:string):(value:KnowledgeDistribution|undefined)=>KnowledgeMaintenanceMatch|undefined {
+  if(!newText.trim())return()=>undefined;
+  const normalized=normalize(newText),matchedCues=new Map<string,boolean>();let available:Set<string>|undefined;
+  const match=(cue:string):boolean=>{
+    const known=matchedCues.get(cue);if(known!==undefined)return known;
+    let found=normalized.includes(normalize(cue));
+    if(!found){const wanted=recallTerms(cue);available??=recallTerms(newText);found=wanted.size>0&&[...wanted].every(term=>available!.has(term));}
+    matchedCues.set(cue,found);return found;
+  };
+  return value=>{
+    if(!value?.topics.length)return;
+    const matched:KnowledgeMaintenanceMatch={topics:[],subjects:[],scopeCues:[],changeCues:[]};
+    for(const key of Object.keys(matched) as (keyof KnowledgeMaintenanceMatch)[])matched[key]=(value[key]??[]).filter(match);
+    return Object.values(matched).some(entries=>entries.length)?matched:undefined;
+  };
+}
 export function knowledgeMaintenanceMatch(value:KnowledgeDistribution|undefined,newText:string):KnowledgeMaintenanceMatch|undefined {
-  if(!value?.topics.length||!newText.trim())return;
-  const matched:KnowledgeMaintenanceMatch={topics:[],subjects:[],scopeCues:[],changeCues:[]};
-  for(const key of Object.keys(matched) as (keyof KnowledgeMaintenanceMatch)[])matched[key]=(value[key]??[]).filter(cue=>matches(newText,cue));
-  return Object.values(matched).some(entries=>entries.length)?matched:undefined;
+  if(!value?.topics.length)return;
+  return knowledgeMaintenanceMatcher(newText)(value);
 }
 /** Inherit navigation only while the current complete prose still carries it. */
 export function inheritKnowledgeDistribution(previous:KnowledgeDistribution|undefined,proposal:KnowledgeDistribution|undefined,text:string,withdrawn:readonly string[]):KnowledgeDistribution|undefined {

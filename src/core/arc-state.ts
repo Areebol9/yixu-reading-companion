@@ -1,3 +1,4 @@
+import {bookVersionAllowsRange,bookVersionAllowsRanges} from './book-versions.ts';
 import {bookLength,covers,id,mergeRanges,normalize} from './books.ts';
 import {evidence,isBackgroundMemory,isCurrentMemory,isEvidenceAllowed,readableRanges,memoryIsForgotten} from './context.ts';
 import {applyStateOperations,parseStateOperation,statePartSources,validateStateParts} from './stage-state.ts';
@@ -56,7 +57,7 @@ export function applyArcOperations(state:State,book:Book,update:ArcUpdate,previo
       if(!op.impact)throw Error('替换跨线影响须重新明确目标、关系及依据');
       const target=state.memories.find(m=>m.id===op.impact!.targetId);
       if(!target||target.kind!=='arc'||!ctx.parents.includes(target.id)||target.arcProjection!.arcId===arcId||target.partnerId!==state.partnerId||target.bookId!==book.id||isBackgroundMemory(target)!==(ctx.source==='background')||!isCurrentMemory(target)||!isEvidenceAllowed(book,target.evidence)||target.evidence.some(e=>!covers(ctx.refs,e)))throw Error('跨线目标须实际完整取得同书同来源的可见弧线具体版本');
-      if(!part.sourceEvidence?.length&&part.memoryRef){const src=state.memories.find(m=>m.id===part.memoryRef!.memoryId)??[...(ctx.proposalSources?.values()??[])].find(m=>m.id===part.memoryRef!.memoryId);const selected=src?.sourceEvidence??(src?.sourceQuote?[src.sourceQuote.evidence]:[]);if(selected.length&&selected.every(e=>e.bookId===book.id&&e.version===book.version&&covers(ctx.refs,e)&&isEvidenceAllowed(book,[e])))part.sourceEvidence=structuredClone(selected);}
+      if(!part.sourceEvidence?.length&&part.memoryRef){const src=state.memories.find(m=>m.id===part.memoryRef!.memoryId)??[...(ctx.proposalSources?.values()??[])].find(m=>m.id===part.memoryRef!.memoryId);const selected=src?.sourceEvidence??(src?.sourceQuote?[src.sourceQuote.evidence]:[]);if(selected.length&&selected.every(e=>e.bookId===book.id&&bookVersionAllowsRange(book,e.version,e)&&covers(ctx.refs,e)&&isEvidenceAllowed(book,[e])))part.sourceEvidence=structuredClone(selected);}
       if(!part.sourceEvidence?.length)throw Error('跨线影响须有精确原文或核验正文出处，完整围栏不是精确来源');
       part.impact={type:op.impact.type,cognition:op.impact.cognition,sourceArcId:arcId,sourceVersionId:versionId,targetArcId:target.arcProjection!.arcId,targetVersionId:target.id};
     }else if(op.impact)throw Error('非影响部件不能携带跨线关系');
@@ -81,7 +82,7 @@ export function validateArcParts(state:State,book:Book,m:Memory,live=false):void
     if(!arcRelations.includes(impact.type)||!['observed','inferred'].includes(impact.cognition)||!target||!origin||target.kind!=='arc'||origin.kind!=='arc'||impact.sourceArcId!==a.arcId||origin.arcProjection?.arcId!==a.arcId||target.arcProjection?.arcId!==impact.targetArcId||impact.targetArcId===a.arcId||target.bookId!==m.bookId||origin.bookId!==m.bookId||target.partnerId!==m.partnerId||origin.partnerId!==m.partnerId||isBackgroundMemory(target)!==isBackgroundMemory(m)||!m.parents.includes(target.id)||!p.sourceEvidence?.length||target.evidence.some(e=>!covers(m.evidence,e))||live&&(!isCurrentMemory(target)||!isEvidenceAllowed(book,target.evidence)||origin.forgotten||!isEvidenceAllowed(book,origin.evidence)))throw Error('跨线影响的历史双方版本或精确来源无效');
   }
   if(a.status==='ended'&&(!a.end||!a.end.text.trim()||!Array.isArray(a.end.sourceEvidence)||m.source!=='correction'&&!a.end.sourceEvidence.length)||a.status!=='ended'&&a.end)throw Error('弧线结束收据无效');
-  if(a.end?.sourceEvidence.some(e=>e.bookId!==book.id||e.version!==book.version||e.start<0||e.end>bookLength(book)||!covers(m.evidence,e)||live&&!isEvidenceAllowed(book,[e])))throw Error('弧线结束出处无效');
+  if(a.end?.sourceEvidence.some(e=>e.bookId!==book.id||!bookVersionAllowsRange(book,e.version,e)||e.start<0||e.end>bookLength(book)||!covers(m.evidence,e)||live&&!isEvidenceAllowed(book,[e])))throw Error('弧线结束出处无效');
 }
 function readableArcs(state:State,book:Book,options:NarrativeReadOptions={},includeInvalid=false):Memory[]{
   const scope={...book,known:readableRanges(book,options.extra??[]).map(r=>({start:r.start,end:Math.min(r.end,options.through??r.end)})).filter(r=>r.end>r.start)};
@@ -128,5 +129,5 @@ export function validateArcMemories(state:State):void{
   for(const m of state.memories){if(m.kind!=='arc'){if(m.arcProjection||m.arcChangeOf)throw Error('弧线元数据所属类型无效');continue;}const book=state.books.find(b=>b.id===m.bookId);if(!book)throw Error('弧线作品缺失');validateArcParts(state,book,m);const root=state.memories.find(x=>x.id===m.arcProjection!.arcId);if(!root||root.kind!=='arc'||root.bookId!==m.bookId||root.partnerId!==m.partnerId||root.arcProjection?.arcId!==root.id)throw Error('弧线初版身份无效');let prev=m.arcChangeOf;const seen=new Set([m.id]);while(prev){if(seen.has(prev))throw Error('弧线继起循环');seen.add(prev);const p=state.memories.find(x=>x.id===prev);if(!p||p.kind!=='arc'||p.arcProjection!.arcId!==m.arcProjection!.arcId||p.bookId!==m.bookId||p.partnerId!==m.partnerId||isBackgroundMemory(p)!==isBackgroundMemory(m))throw Error('弧线继起身份无效');if(prev===m.arcChangeOf&&!['correction','review'].includes(m.source)&&!m.parents.includes(prev))throw Error('弧线前身依赖缺失');prev=p.arcChangeOf;}}
 }
 export function analysisCoverage(state:State,book:Book,source:'preparation'|'reading'|'background'='preparation'):Range[]{
-  return mergeRanges((state.readings??[]).filter(r=>r.bookId===book.id&&r.version===book.version&&r.partnerId===state.partnerId&&(r.source==='background')===(source==='background')&&r.arcCandidate==='v1'&&r.processing==='model').flatMap(r=>r.ranges).filter(r=>isEvidenceAllowed(book,[evidence(book,r)])));
+  return mergeRanges((state.readings??[]).filter(r=>r.bookId===book.id&&bookVersionAllowsRanges(book,r.version,r.ranges)&&r.partnerId===state.partnerId&&(r.source==='background')===(source==='background')&&r.arcCandidate==='v1'&&r.processing==='model').flatMap(r=>r.ranges).filter(r=>isEvidenceAllowed(book,[evidence(book,r)])));
 }

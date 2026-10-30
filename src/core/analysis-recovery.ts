@@ -1,3 +1,5 @@
+import {bookVersionPrefixLength} from './book-versions.ts';
+import {bookVersionAllowsRanges,resolveBookVersion} from './book-versions.ts';
 import {covers,mergeRanges,normalize,subtractRanges} from './books.ts';
 import {evidence,isBackgroundMemory,isEvidenceAllowed,isCurrentMemory,memoryIsForgotten} from './context.ts';
 import {analysisCoverage} from './arc-state.ts';
@@ -19,7 +21,7 @@ export function planAnalysisRecovery(state:State,book:Book,options:{profile?:'an
   const profile=options.profile??'analysis',wanted=mergeRanges(options.requestedRanges??book.known);
   if(!['analysis','full-original'].includes(profile)||wanted.some(r=>!isEvidenceAllowed(book,[evidence(book,r)])))throw Error('恢复规划须使用当前明确授权的完整范围');
   const arcCoverage=analysisCoverage(state,book),worldCandidateCoverage=worldCoverage(state,book),candidateCoverage=book.arcCandidate&&book.worldCandidate?mergeRanges(arcCoverage.flatMap(a=>worldCandidateCoverage.map(b=>({start:Math.max(a.start,b.start),end:Math.min(a.end,b.end)})).filter(r=>r.end>r.start))):book.worldCandidate?worldCandidateCoverage:arcCoverage;
-  const layoutHandled=mergeRanges((state.readings??[]).filter(r=>r.bookId===book.id&&r.version===book.version&&r.partnerId===state.partnerId&&r.source!=='background'&&r.processing==='layout'&&r.ranges.every(p=>isEvidenceAllowed(book,[evidence(book,p)]))).flatMap(r=>r.ranges));
+  const layoutHandled=mergeRanges((state.readings??[]).filter(r=>r.bookId===book.id&&bookVersionAllowsRanges(book,r.version,r.ranges)&&r.partnerId===state.partnerId&&r.source!=='background'&&r.processing==='layout'&&r.ranges.every(p=>isEvidenceAllowed(book,[evidence(book,p)]))).flatMap(r=>r.ranges));
   // Include invalid successors when finding chain ends; usable-only selection would roll back time.
   const scope=state.memories.filter(m=>['stage','state','arc'].includes(m.kind)&&m.bookId===book.id&&m.partnerId===state.partnerId&&!isBackgroundMemory(m)&&isEvidenceAllowed(book,m.evidence));
   const ids=new Map(scope.map(m=>[m.id,m])),resolve=(key:string)=>{const seen=new Set<string>();while(ids.get(key)?.replacedBy&&ids.has(ids.get(key)!.replacedBy!)&&!seen.has(key)){seen.add(key);key=ids.get(key)!.replacedBy!;}return key;};
@@ -33,7 +35,7 @@ export function planAnalysisRecovery(state:State,book:Book,options:{profile?:'an
     if(superseded.has(m.id)||m.kind==='arc'&&!book.arcCandidate||m.source==='correction'||!reviewableFact(state,book,m)||memoryIsForgotten(state,m))continue;
     const {ranges,rangeSource}=formedRanges(m);if(!ranges.length||!ranges.every(r=>covers(wanted,r)))continue;
     if(isCurrentMemory(m))continue;
-    const task=(state.tasks??[]).find(t=>t.bookId===book.id&&t.version===book.version&&t.partnerId===state.partnerId&&['running','interrupted','cancelled'].includes(t.status)&&t.items.some(i=>i.memoryId===m.id&&i.status==='pending'));
+    const task=(state.tasks??[]).find(t=>t.bookId===book.id&&bookVersionPrefixLength(book,t.version)!==undefined&&t.partnerId===state.partnerId&&['running','interrupted','cancelled'].includes(t.status)&&t.items.some(i=>i.memoryId===m.id&&i.status==='pending'));
     const taskItem=task?.items.find(i=>i.memoryId===m.id),allowance=task&&taskItem?reviewItemAllowance(state,task,taskItem,options.transport):undefined;
     const availability=m.reviewDisposition==='unsupported'?'unsupported':taskItem?.reviewReadyInvalidated?'stale-result':taskItem?.reviewReady?'ready':allowance&&allowance.availability!=='reviewable'?allowance.availability:task?.status==='cancelled'?'cancelled':allowance?.transport==='agent'&&options.transport==='json'?'transport-unavailable':'reviewable';
     recoveryItems.push({memoryId:m.id,kind:m.kind as AnalysisRecoveryItem['kind'],ranges:structuredClone(ranges),rangeSource,availability,...(task?{taskId:task.id}:{}),...(allowance?{used:allowance.used,remaining:allowance.remaining}:{})});

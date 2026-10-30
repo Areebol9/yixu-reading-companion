@@ -1,0 +1,8 @@
+.conversation-notice-anchor{position:relative;display:flex;align-items:center;flex-shrink:0}
+.published-reply-preview{position:absolute;right:calc(100% + 8px);top:50%;transform:translateY(-50%);z-index:45;width:300px;display:flex;align-items:center;gap:8px;max-width:430px;min-width:0;padding:7px 9px 7px 12px;border:1px solid #e7e0d9;border-radius:9px;background:#f4f0eb;color:#655545;box-shadow:0 2px 8px #4b3c2d06}
+.published-preview-open{display:flex;align-items:flex-start;flex-direction:column;gap:3px 10px;min-width:0;flex:1;padding:0;border:0;background:transparent;text-align:left;color:inherit;cursor:pointer}
+.published-preview-label{flex-shrink:0;font:10px/1.7 system-ui,sans-serif;color:#8d7e70}
+.published-preview-quote{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:1.8;min-width:0}
+.published-preview-close{flex-shrink:0;display:grid;place-items:center;width:26px;height:26px;padding:0;border:0;border-radius:5px;background:transparent;font:18px/1 system-ui,sans-serif;color:#948678;cursor:pointer}
+.published-preview-close:hover{background:#ece5de}
+@media(max-width:760px){.published-reply-preview{width:min(260px,calc(100vw - 155px));padding:5px 7px 5px 10px}.published-preview-quote{font-size:11px}}

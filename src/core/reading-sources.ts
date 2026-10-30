@@ -7,6 +7,14 @@ export class ReadingSources {
   private byRange = new Map<string, string>();
   private nextId = 1;
 
+  /** Inherited native history reserves its labels without supplying a body. */
+  reserveIds(ids: Iterable<string>): void {
+    for (const key of ids) {
+      if (!/^p[1-9]\d*$/.test(key) || !Number.isSafeInteger(Number(key.slice(1)))) throw Error('原文编号水位无效');
+      this.nextId = Math.max(this.nextId, Number(key.slice(1)) + 1);
+    }
+  }
+
   restore(passages: Iterable<[string, NonNullable<Memory['sourceQuote']>]>): void {
     this.passages.clear();this.byRange.clear();this.nextId=1;
     for(const [key,value]of passages){

@@ -80,7 +80,7 @@ export function applyFactReview(state: State, review: FactReview, result: Review
       JSON.stringify(memory.stageNarrative)!==JSON.stringify(expected.stageNarrative)||JSON.stringify(memory.stateProjection)!==JSON.stringify(expected.stateProjection)||memory.stateChangeOf!==expected.stateChangeOf||JSON.stringify(memory.arcProjection)!==JSON.stringify(expected.arcProjection)||memory.arcChangeOf!==expected.arcChangeOf||
       r.stageContinues!==undefined&&(memory.kind!=='stage'||r.text===null||typeof r.stageContinues!=='boolean')||
       r.stateStatus!==undefined&&(memory.kind!=='state'||r.text===null||!['active','ended'].includes(r.stateStatus)||r.stateStatus==='ended'&&!memory.stateChangeOf)||
-      r.text !== null && (!r.text.trim() || r.text.length > memoryTextLimit(memory.kind) || ['question','opinion'].includes(memory.kind)&&r.text!==requireMemoryText(memory) || !r.evidence.length || !isEvidenceAllowed(book, r.evidence) || state.forgotten.some(f => f.bookId === book.id && normalize(r.text!).includes(normalize(f.text)))) ||
+      r.text !== null && (!r.text.trim() || memory.kind!=='opinion'&&r.text.length > memoryTextLimit(memory.kind)! || ['question','opinion'].includes(memory.kind)&&r.text!==requireMemoryText(memory) || !r.evidence.length || !isEvidenceAllowed(book, r.evidence) || state.forgotten.some(f => f.bookId === book.id && normalize(r.text!).includes(normalize(f.text)))) ||
       r.evidence.some(e => !review.sources.some(s => JSON.stringify(s.evidence) === JSON.stringify(e)))) throw new Error('核对记录已更新，未修改记忆');
     return memory;
   });
@@ -173,7 +173,7 @@ export function focusFactReview(review: FactReview): FactReview {
 export function createFactReview(book: Book, rawCandidates: (Omit<FactCandidate,'text'>&{text?:string})[], additional: Evidence[] = [], partialQuestions:ReadonlyMap<string,Memory>=new Map()): FactReview {
   const candidates=rawCandidates.map(c=>({...c,text:requireMemoryText(c as Memory)}));
   if (!candidates.length || candidates.length > 8 || new Set(candidates.map(c => c.id)).size !== candidates.length) throw new Error('事实核对条目数量或标识无效');
-  if (candidates.some(c => !c.id || !c.text.trim() || c.text.length > memoryTextLimit(c.kind) || c.kind!==undefined&&!['story','context','opinion','question','stage','state','arc'].includes(c.kind) || !isEvidenceAllowed(book, c.evidence)) || additional.length && !isEvidenceAllowed(book, additional)) throw new Error('事实核对资料超出当前允许范围');
+  if (candidates.some(c => !c.id || !c.text.trim() || c.kind!=='opinion'&&c.text.length > memoryTextLimit(c.kind)! || c.kind!==undefined&&!['story','context','opinion','question','stage','state','arc'].includes(c.kind) || !isEvidenceAllowed(book, c.evidence)) || additional.length && !isEvidenceAllowed(book, additional)) throw new Error('事实核对资料超出当前允许范围');
   const special=candidates.some(c=>c.kind==='stage'||c.kind==='state'||c.kind==='arc');
   if(special&&candidates.length!==1)throw Error('阶段与状态须按单条完整范围核对');
   const readWithin=special?mergeRanges(candidates.flatMap(c=>c.evidence).map(({start,end})=>({start,end}))):undefined;
@@ -242,7 +242,7 @@ export function parseFactReview(review: FactReview, content: string): ReviewedFa
     const candidate = review.candidates.find(c => c.id === item?.id);
     if (!candidate) throw new Error('事实核对记录编号未提供，未修改记忆');
     if (seen.has(item.id)) throw new Error('事实核对记录编号重复，未修改记忆');
-    if (item.text !== null && (typeof item.text !== 'string' || !item.text.trim() || item.text.length > memoryTextLimit(candidate.kind))) throw new Error(`事实核对正文须为1至${memoryTextLimit(candidate.kind)}字符或null，未修改记忆`);
+    if (item.text !== null && (typeof item.text !== 'string' || !item.text.trim() || candidate.kind!=='opinion'&&item.text.length > memoryTextLimit(candidate.kind)!)) throw new Error(`事实核对正文须为1至${memoryTextLimit(candidate.kind)}字符或null，未修改记忆`);
     if (!Array.isArray(item.sourceIds)) throw new Error('事实核对来源编号须为数组，未修改记忆');
     if (item.sourceIds.some((id: unknown) => typeof id !== 'string')) throw new Error('事实核对来源编号须为字符串，未修改记忆');
     if (new Set(item.sourceIds).size !== item.sourceIds.length) throw new Error('事实核对来源编号重复，未修改记忆');

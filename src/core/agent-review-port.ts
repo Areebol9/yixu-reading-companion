@@ -1,7 +1,7 @@
 import type { FactReview, ReviewedFact, FactSource } from './fact-review.ts';
-import type { AgentModelRequest } from './agent-port.ts';
+import type { AgentModelRequest,AgentRunRequest } from './agent-port.ts';
 
-export type AgentReviewRequest = AgentModelRequest & {
+export type AgentReviewRequest = AgentModelRequest & Pick<AgentRunRequest<ReviewedFact[]>,'session'|'projectDirectory'|'sessionDirectory'|'task'|'materialExposure'|'commit'|'recoverCommit'|'runtimeContext'> & {
   review: FactReview;
   lookupEvidence?(query: string): Promise<Omit<FactSource, 'id'>[]>;
   /** Persist visible original-text coordinates before the next model request. */

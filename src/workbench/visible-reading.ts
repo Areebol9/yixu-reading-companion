@@ -29,7 +29,12 @@ export function restoreReadingPosition(paper: HTMLElement | null, content: HTMLE
   if (!paper || !content) return;
   paper.scrollTop = 0;
   if (position <= Number(content.querySelector<HTMLElement>('[data-reading-start]')?.dataset.readingStart ?? position)) return;
-  const target = [...content.querySelectorAll<HTMLElement>('[data-reading-start]')].find(element => Number(element.dataset.readingEnd) > position);
+  const paragraphs = [...content.querySelectorAll<HTMLElement>('[data-reading-start]')];
+  // An exclusive body endpoint (or trailing layout whitespace) has no glyph.
+  // Keep its original coordinate and restore the last rendered text instead.
+  const last = paragraphs.at(-1);
+  const target = paragraphs.find(element => Number(element.dataset.readingEnd) > position)
+    ?? (last && position >= Number(last.dataset.readingEnd) ? last : undefined);
   const node = target?.firstChild;
   if (!target || node?.nodeType !== Node.TEXT_NODE) return;
   const index = Math.max(0, Math.min((node.textContent?.length ?? 1) - 1, position - Number(target.dataset.readingStart)));

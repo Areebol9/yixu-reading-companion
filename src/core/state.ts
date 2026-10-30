@@ -1,8 +1,9 @@
 import type { State } from './types.ts';
+import {createPartnerFromTemplate} from './partner-persona.ts';
 export function initialState(): State {
-  return {
-    schema: 1, books: [], memories: [], chats: [], conversations: [], usage: [], forgotten: [],
-    partnerId: 'default', partners: [{ id: 'default', name: '共读伙伴', traits: '有自己的阅读判断，愿意听取不同意见；关注当前作品，表达简短自然。', backgroundBooks: [] }],
+  const state:State = {
+    schema: 1, publicationTrackingStartedAt:Date.now(), books: [], memories: [], chats: [], conversations: [], usage: [], forgotten: [],
+    partnerId: 'default', partners: [],
     settings: {
       serviceId: 'wechat', tokenLimit: 100_000, searchEnabled: false, searchProvider: 'exa', searchEndpoint: 'https://mcp.exa.ai/mcp', searchSecretRef: '', minReadChars: 160, minReactionMs: 18_000, defaultQuiet: false, readingEffort: 'medium',
       services: [
@@ -11,4 +12,6 @@ export function initialState(): State {
       ]
     }
   };
+  createPartnerFromTemplate(state,undefined,{id:'default'});
+  return state;
 }

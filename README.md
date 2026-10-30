@@ -1,83 +1,95 @@
-# 宜序伴读
+# Yixu Reading Companion · 宜序伴读
 
-**Yixu Reading Companion**
+[English](README.md) · [简体中文](README.zh-CN.md)
 
-宜序伴读是一项面向长篇阅读的 AI 伴读项目。伙伴随着读者的阅读进度理解作品、形成看法，并在交流中接续前文与共同讨论。读者可以随时提问、围绕原文交换意见，也可以选择安静共读。
+Yixu is a desktop AI companion for long books. Read at your own pace, talk in the sidebar, and invite a reply to a particular passage. Background processing builds reusable book knowledge while each companion keeps its own conversations and private memories.
 
-项目处于原型开发阶段，当前重点完善 PC 端的阅读、交流与持续理解流程。工程包含共享核心、PC 共读界面、模型服务接入和 Android 平台源码。
+![Yixu icon](desktop/assets/app-icon-32.png)
 
-![宜序伴读 PC 客户端，演示模式使用指南](design/client-desktop.jpg)
+## Download and start
 
-## 启动 PC 客户端
+Download the **Windows x64 portable ZIP** from [Releases](https://github.com/Areebol9/yixu-reading-companion/releases). Extract the entire folder and double-click **Start Yixu Reading Companion.cmd**. Windows 10 or 11 x64 is required. Electron, Node.js, and production dependencies are included; no development tools are needed.
 
-### Windows 便携包
+The app starts with an empty library. It includes no books, personal conversations, API keys, or reading archives.
 
-从 [Releases](https://github.com/Areebol9/yixu-reading-companion/releases) 下载 Windows x64 ZIP，完整解压后双击 **`启动宜序伴读.cmd`**。便携包内置 Node.js 和运行依赖，解压即可启动。
+1. In **Settings**, choose **English** or **简体中文**. The choice is saved. A fresh English archive uses **Yu Xiaoyu**, faithfully translated from the Chinese persona and examples. Changing language in an existing archive preserves its chosen companion.
+2. Import a TXT file you have permission to use, then select your reading position.
+3. Configure a background model in **Model settings**. On the companion page, independently bind a model to your companion. Enter your service URL, model identifier, and API key. Use an OpenAI-compatible service with streaming and tool calls. Provider charges apply; the app does not supply inference credits.
+4. Start reading together, send a sidebar message, or leave a paragraph comment and invite a reply. The reply remains attached to your comment when you move elsewhere.
+5. Pause when needed. Already-sent requests are received and saved. Reopening keeps your records and does not automatically resume paid model work.
 
-运行环境为 Windows 10 / 11 x64，并已安装 Microsoft Edge 或 Google Chrome。客户端使用浏览器的独立窗口，资料保存在解压目录下的 `.local/`；升级时请保留该目录。下载页同时提供 SHA-256 校验文件。
+The book stays in the main reading area. Paragraph comment counts sit after the text. Chat history loads older messages as you scroll up. The companion's name and avatar identify its contributions.
 
-### 从源码运行
+## Nebius and NVIDIA models
 
-环境要求：Node.js 24 或更新版本。
+The same settings support Nebius Token Factory:
 
-```bash
+- Base URL: `https://api.tokenfactory.nebius.com/v1`
+- Model: choose a NVIDIA model available in your account. HTTP streaming and tool-result continuation have been checked with `nvidia/Nemotron-3_5-Lightning`.
+- API key: supply your own Token Factory key. Do not include it in a public repository or distributable.
+
+This check covers transport and tool continuation, not complete reading-session quality or speed for every model. Set supported context and output limits using [Token Factory documentation](https://docs.tokenfactory.nebius.com/) and the current model catalog.
+
+## Data and privacy
+
+Books, conversations, reading permissions, saved responses, and usage records are stored locally. Material needed for an authorized request is sent to the selected provider. The app does not post comments on external reading platforms.
+
+The default data root is `%LOCALAPPDATA%\YixuReading\Desktop`; the app remembers its selected location. **File → Open data folder** shows the actual folder. Set `YIXU_DATA_DIR` before startup to select a separate data root. Keep your data folder when replacing program files.
+
+**Book details** lets you choose and migrate book project folders for agents. Imported source text stays separately in the app's library. Book analysis is shared within the book project; private companion memories keep their owner. Use the normal backup/export and import functions to transfer reading archives. Unconfirmed requests keep their original records and recovery actions rather than being blindly resent.
+
+## Window and background operation
+
+- Launching again opens the existing instance.
+- The notification-area icon opens the main window and offers **Save and quit**.
+- Minimizing stops new manual reading observations; accepted background work continues.
+- Closing during active work offers background processing or waiting for current replies to be saved.
+- Agent/headless mode uses the same archive. It can open the same window later without taking mouse or keyboard focus during background work.
+
+## Build and package
+
+Requires Node.js 24 or newer. Windows is required for the desktop package.
+
+```powershell
 npm ci --ignore-scripts
+node node_modules/electron/install.js
 npm run build
-npm run workbench
+npm run desktop
+pwsh -File scripts/package-client.ps1
 ```
 
-打开 <http://127.0.0.1:4323/workbench.html>。Windows 安装依赖并完成构建后，也可双击 **`启动宜序伴读.cmd`**，通过 Edge 或 Chrome 的独立窗口使用客户端。启动器优先使用 PowerShell 7，也兼容系统自带的 Windows PowerShell；浏览器资料单独保存在 `.local/client-browser`。
+The complete ZIP and SHA-256 checksum are written to `artifacts/`. The packager uses locked dependencies and the official Node.js distribution. It includes the sources listed in `client-core-manifest.json`, the desktop shell, compiled interface, licenses, and production dependencies. Development records and user data are excluded.
 
-导入自己有权使用的 TXT 文件，在模型设置中填写兼容接口的服务地址、模型和凭据，保存并启用后开始伴读。默认提供离线界面演练；阅读资料和服务配置由使用者自行添加。
+## Agent interface
 
-后端端口可通过环境变量 `YIXU_PORT` 或 `YIXU_WORKBENCH_PORT` 设置，前者优先。按 `Ctrl+C` 结束本地服务。
+**Agent.cmd** returns JSON and controls the same authenticated local service as the window:
 
-独立窗口入口会复用它能确认归属的本项目服务，或在后台启动服务。关闭阅读窗口后，本地服务继续可用；若此前通过终端启动而入口无法确认归属，先在原终端按 `Ctrl+C`，再双击启动。
+```powershell
+.\Agent.cmd start --headless
+.\Agent.cmd status
+.\Agent.cmd import .\book.txt
+.\Agent.cmd command sendMessage --json '["What do you make of this passage?",false]'
+.\Agent.cmd pause
+.\Agent.cmd export --file .\reading-backup.json
+.\Agent.cmd open
+.\Agent.cmd hide
+.\Agent.cmd quit
+```
 
-开发时可在两个终端分别运行 `npm run bridge` 和 `npm run dev`，打开 <http://127.0.0.1:5174/workbench.html>。开发端口可用 `YIXU_DEV_PORT` 设置，端口被占用时启动会停止。
+From source, use `node desktop/agent.cjs <command>`. `status` is lightweight; `snapshot` explicitly fetches the larger interface snapshot. Accepted/running commands return identifiers for checking the same operation:
 
-制作 Windows 便携包：安装依赖后运行 `pwsh -File scripts/package-client.ps1`。脚本构建客户端、下载并校验固定版本的官方 Node.js，生成的 ZIP 和 SHA-256 校验文件位于 `artifacts/`。
+```powershell
+.\Agent.cmd operation "<commandId>" --archive-id "<archiveId>" --epoch "<epoch>"
+```
 
-## 关注的阅读体验
+Use `extend-source <file> --book-id <id>` to append a matching later edition while preserving existing text and anchors. Developer automatic reading uses `auto-read --json '<settings>'`; `AutoReadingSettings` in `src/workbench/contract.ts` defines the explicit range, speed, and cumulative token limit. It can incur model usage. Hidden execution does not establish that a human saw a reply on screen.
 
-| 场景 | 设计方向 |
-| --- | --- |
-| 一起读下去 | 跟随真实章节和段落，在读者授权的已读范围内参与交流 |
-| 随时聊几句 | 围绕眼前内容、人物和此前讨论接话，由伙伴决定是否主动表达 |
-| 在原文旁留注 | 将评价关联到具体段落，支持回看、回复和继续讨论 |
-| 接得上长篇故事 | 持续更新对人物、关系和情节的理解，需要时回查已读原文 |
-| 按自己的节奏阅读 | 提供安静、暂停、结束和保存后接续等控制 |
+## Current limitations
 
-## 设计原则
+This is a development release. Long conversation context and large background outputs can cause noticeable delays. Work at the final reading position may remain queued after a pause and continue when resumed. Background completion and a natural, timely companion experience remain separate goals. Different companions can be configured, but simultaneous multi-companion reading is not implemented.
 
-- **以读者进度为边界。**浏览位置、授权内容和已完成的理解分别管理，模型按实际获准材料工作。
-- **保留观点与出处。**作品原文、人物说法、读者观点和伙伴判断各有归属；伙伴的看法可以随阅读变化。
-- **让交流与理解相互承接。**即时交流关注当前阅读，后台持续整理认识，真实讨论进入后续理解。
-- **让表达留在合适的位置。**针对某段形成的主动评价，返回时若已翻过该页，就以原话留作对应段评。
-- **尊重阅读节奏。**伙伴可以表达，也可以安静。段评保存在本项目的阅读记录中，由读者选择何时查看。
+## Contributing and license
 
-## 当前方向
+Report reproducible issues using sanitized diagnostics; never include API keys, copyrighted book text, or personal archives. UI changes should cover both languages and preserve the reading area. Storage changes should preserve existing records and recovery behavior.
 
-当前开发围绕 PC 阅读原型推进，重点是即时交流、持续理解、按需回查以及保存与接续。移动端适配、语音交互与更多阅读来源属于后续建设方向。
-
-系统按界面、共读协调、理解资料和外部服务划分职责，便于各部分独立演进。详细说明见[架构概览](ARCHITECTURE.md)。
-
-## 代码结构
-
-| 目录 | 内容 |
-| --- | --- |
-| `src/core/`、`src/agent/` | 共读、持续理解、资料回查与模型任务执行 |
-| `src/workbench/`、`src/platform/` | PC 阅读界面、存储及平台接入 |
-| `src/native/`、`android/` | 原生运行接口与 Android 平台源码 |
-| `scripts/`、`tests/` | 运行、构建脚本与技术测试 |
-| `third_party/` | 保留的第三方组件、许可与必要署名 |
-
-Android 构建另需 Java、Android SDK、NDK 及原生语音依赖，入口为 `scripts/build-android.ps1`。移动端的适配与交付持续推进。
-
-## 许可与商业授权
-
-本项目自有源码采用 **GNU GPL v3（GPL-3.0-only）**，完整条款见 [LICENSE](LICENSE)。可以按照 GPLv3 使用、修改及分发，包括符合其条件的商业使用和发行。
-
-对于需要按其他条件使用或分发本项目自有代码的需求，可向项目权利人申请另行商业授权。具体范围、条件及费用以单独书面协议为准。本说明本身不授予 GPLv3 之外的权利。
-
-第三方组件与明确标注的改写内容继续遵守各自许可，相关文本和署名保留于 `third_party/` 及相应依赖中。人格提示词的改写许可见 [Nano Bear 署名说明](third_party/nanobear/NOTICE.md)。另行商业授权仅覆盖权利人有权再授权的部分。
+Source is licensed under **GPL-3.0-only**. See [LICENSE](LICENSE) and [third-party notices](THIRD_PARTY_NOTICES.md).

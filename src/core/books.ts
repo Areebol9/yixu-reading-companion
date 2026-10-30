@@ -1,3 +1,4 @@
+import {detectBookStructure} from './book-structure.ts';
 import type { Book, Chapter, Range } from './types.ts';
 import { hashText } from './text-hash.ts';
 
@@ -46,12 +47,8 @@ export async function importBook(title: string, raw: string): Promise<Book> {
   if (!text.trim()) throw new Error('文件中没有可读文字');
   if (text.length > 30_000_000) throw new Error('当前原型单本支持约三千万字符，请分卷导入');
   const version = await hashText(text);
-  const starts: { start: number; title: string }[] = [];
-  const re = /^(?:[ \t]*)(第[零〇一二三四五六七八九十百千万两\d]+[章回节卷部集][^\n]{0,70}|chapter\s+\d+[^\n]{0,70})$/gim;
-  for (const m of text.matchAll(re)) starts.push({ start: m.index!, title: m[1].trim() });
-  if (!starts.length || starts[0].start > 0) starts.unshift({ start: 0, title: starts.length ? '卷首' : '正文' });
-  const chapters: Chapter[] = starts.map((s, i) => {const end=starts[i+1]?.start??text.length,part=text.slice(s.start,end),lineEnd=part.indexOf('\n'),header=lineEnd>=0&&part.slice(0,lineEnd).trim()===s.title?lineEnd+1:0;return{...s,index:i,end,contentStart:s.start+header+(part.slice(header).match(/^\s*/u)?.[0].length??0),contentEnd:end-part.match(/\s*$/u)![0].length};});
-  return { id: id(), title: title.replace(/\.txt$/i, ''), version, text, textLength: text.length, chapters, frontMatterEnd: frontMatterEnd(text, chapters), known: [], position: 0, prepared: [], archived: false, createdAt: Date.now() };
+  const detected=detectBookStructure(title,text),chapters=detected.chapters;
+  return { id: id(), title: title.replace(/\.txt$/i, ''), version, text, textLength: text.length, chapters,directory:{version,entries:chapters,unresolved:detected.ambiguous,method:'local'}, frontMatterEnd: frontMatterEnd(text, chapters), known: [], position: 0, prepared: [], archived: false, createdAt: Date.now() };
 }
 export function decodeBook(bytes: ArrayBuffer): string {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }

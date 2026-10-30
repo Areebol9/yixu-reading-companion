@@ -1,19 +1,24 @@
+import {memoryReadableByPartner} from './book-document-ownership.ts';
+import {bookVersionPrefixLength} from './book-versions.ts';
 import {bookTextSlice} from './books.ts';
-import {viewAllowed} from './published-views.ts';
+import {publishedViewChecker} from './published-views.ts';
 import {validateTaskMaterialRef} from './storage-records.ts';
 import {validateMaterialProjection} from './material-projection.ts';
 import {isWorkspaceVersion} from './types.ts';
 import {covers,bookLength,normalize} from './books.ts';
 import {chatIsTaskSource,isEvidenceAllowed} from './context.ts';
-import {dependencyStamp} from './reading-drafts.ts';
+import {dependencyStamp,prepareDependencyStamp} from './reading-drafts.ts';
+import {inheritDependencyPreparation,DependencyPreparationRequired,linkDependencyProjectionOwners} from './dependency-nodes.ts';
 import {parseReadingReply} from './model.ts';
 import {isNaturalReadingText} from './reading-output.ts';
-import {completeSubmitObject} from './agent-port.ts';
 import {publicWebUrl} from './web.ts';
 import {chatBelongsToPartner} from './discussion-recall.ts';
 import {ReadingReferences} from './reading-references.ts';
+import {isSingleEmoji} from './message-reactions.ts';
 import {hashText} from './text-hash.ts';
 import {stampsEqual} from './memory-identity.ts';
+import {resolveBookVersion,bookVersionAllowsRange} from './book-versions.ts';
+import {dependencyStampsEqual} from './dependency-chat-sources.ts';
 import {stagedHabits,validHabit} from './habits.ts';
 import type {AgentModelReply,Chat,ModelReply,QueryCheckpoint,QueryMaterial,State} from './types.ts';
 
@@ -21,37 +26,41 @@ import type {AgentModelReply,Chat,ModelReply,QueryCheckpoint,QueryMaterial,State
 export function receiveQueryResponse(q:QueryCheckpoint,response:ModelReply,material:QueryMaterial|undefined,stamp:string|undefined,phase:'main'|'receipt-repair'):boolean{
   if('toolCalls'in response&&material?.readingStrategy==='companion'&&material.answerScope==='overview'&&!material.answerPreparation)return false;
   let candidate:QueryCheckpoint['candidate'];
-  if('toolCalls'in response){const r=response as AgentModelReply,submit=r.toolCalls.filter(t=>t.function.name==='submit_reading');if(submit.length&&(r.toolCalls.length!==1||submit.length!==1))throw Error('完整问题提交不能和新取材工具混在同一回执');if(submit.length)candidate={format:'submit',text:completeSubmitObject(submit[0].function.arguments),...(isNaturalReadingText(r.content)?{finalText:r.content}:{}),transport:'agent',phase};else if(r.finish==='stop')candidate={format:'content',text:r.content,transport:'agent',phase};}
+  if('toolCalls'in response){const r=response as AgentModelReply,submit=r.toolCalls.filter(t=>t.function.name==='submit_reading');if(submit.length&&(r.toolCalls.length!==1||submit.length!==1))throw Error('完整问题提交不能和新取材工具混在同一回执');if(submit.length)candidate={format:'submit',text:submit[0].function.arguments,...(isNaturalReadingText(r.content)?{finalText:r.content}:{}),transport:'agent',phase};else if(r.finish==='stop')candidate={format:'content',text:r.content,transport:'agent',phase};}
   else candidate={format:'content',text:response.content,transport:'json',phase};
   if(!candidate)return false;
   try{const raw=JSON.parse(candidate.text.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,''));if(raw&&['read','lookup','recall','history','search','readPage'].some(k=>raw[k]))return false;}catch{}
   if(!material||!stamp)throw Error('原答已结算；原输入的完整材料或编号映射尚未核验，暂不应用');
-  q.status='received';q.candidate=candidate;q.material=structuredClone(material);delete q.result;delete q.blockedReason;q.dependencyStamp=stamp;delete q.pendingReceipt;return true;
+  q.status='received';q.candidate=candidate;q.material=structuredClone(material);inheritDependencyPreparation(material,q.material);delete q.result;delete q.blockedReason;q.dependencyStamp=stamp;delete q.pendingReceipt;return true;
 }
 
 export function questionStamp(q:Chat):string{return JSON.stringify([q.id,q.bookId,q.partnerId,q.sessionId,q.text,q.evidence,q.excluded,q.outdatedBy,q.replacedBy,q.futureGrant,q.memoryAllowed,q.longReply,q.corrects,...(q.paragraphCommentId?['paragraph-comment',q.paragraphCommentId]:[]),...(q.answerScope?['answer-scope',q.answerScope]:[])]);}
 export function querySourceStamp(state:State,memoryIds:string[]=[],chatIds:string[]=[],sourceStampVersion?:2):string{
   return dependencyStamp(state,{messages:[],refs:[],originalRanges:[],memoryIds,chatIds,habitIds:[],passages:[],basisStampVersion:1,...(sourceStampVersion?{sourceStampVersion}:{})});
 }
-export function queryMaterialState(state:State,m:QueryMaterial):State{return m.pendingHabits?stagedHabits(state,m.pendingHabits):state;}
+export function queryMaterialState(state:State,m:QueryMaterial):State{const job=m.taskRole==='maintenance'&&m.maintenanceJobId?state.maintenanceJobs?.find(job=>job.id===m.maintenanceJobId):undefined;if(job?.scope==='book'&&job.partnerId!==state.partnerId){const source={...state,partnerId:job.partnerId};linkDependencyProjectionOwners(source,state);state=source;}if(!m.pendingHabits)return state;const staged=stagedHabits(state,m.pendingHabits);linkDependencyProjectionOwners(staged,{...state,habits:[...(state.habits??[]),...m.pendingHabits.added]});return staged;}
+export async function prepareQueryMaterial(state:State,m:QueryMaterial,result?:QueryCheckpoint['result']):Promise<void>{await prepareDependencyStamp(queryMaterialState(state,m),{...m,messages:[],memoryIds:[...m.memoryIds,...(m.partialMemoryIds??[])]},result);}
 export function pendingHabitInputStamp(state:State,plan:NonNullable<QueryMaterial['pendingHabits']>):string{return JSON.stringify((state.habits??[]).filter(h=>plan.retired.some(r=>r.id===h.id)||plan.added.some(n=>n.partnerId===h.partnerId&&n.key===h.key)&&!h.forgotten&&!h.retiredBy&&!h.invalidatedBy).sort((a,b)=>a.id.localeCompare(b.id)));}
 export function queryMaterialStamp(state:State,m:QueryMaterial,result?:QueryCheckpoint['result']):string{const stamp=dependencyStamp(queryMaterialState(state,m),{...m,messages:[],memoryIds:[...m.memoryIds,...(m.partialMemoryIds??[])]},result);return m.answerScope||m.answerPreparation?JSON.stringify({...JSON.parse(stamp),...(m.answerScope?{answerScope:m.answerScope}:{}),...(m.answerPreparation?{answerPreparation:m.answerPreparation}:{})}):stamp;}
 export function queryCheckpoint(state:State,questionId:string):QueryCheckpoint{
   const q=state.chats.find(q=>q.id===questionId&&q.role==='user'),book=state.books.find(b=>b.id===q?.bookId);
   if(!q||!book||q.excluded||q.outdatedBy||q.replacedBy||q.futureGrant||!chatBelongsToPartner(state,q))throw Error('原问题不适用持久接续');
   const old=state.queryCheckpoints?.find(c=>c.questionId===questionId);
-  if(old){if(old.questionStamp!==questionStamp(q)||old.version!==book.version||old.partnerId!==state.partnerId)throw Error('原问或作品已变化，不能沿用旧问题进度');if(old.blockedReason)throw Error(old.blockedReason);if(old.status==='consumed'||q.delivery==='answered'||state.chats.some(c=>c.role==='assistant'&&c.replyTo===q.id&&!c.excluded&&!c.outdatedBy&&!c.replacedBy))throw Error('原问题已保存完整回应');return old;}
+  if(old){if(old.questionStamp!==questionStamp(q)||bookVersionPrefixLength(book,old.version)===undefined||old.partnerId!==state.partnerId)throw Error('原问或作品已变化，不能沿用旧问题进度');if(old.blockedReason)throw Error(old.blockedReason);if(old.status==='consumed'||q.delivery==='answered'||state.chats.some(c=>c.role==='assistant'&&c.replyTo===q.id&&!c.excluded&&!c.outdatedBy&&!c.replacedBy))throw Error('原问题已保存完整回应');return old;}
   const value:QueryCheckpoint={id:questionId,questionId,bookId:book.id,version:book.version,partnerId:state.partnerId,questionStamp:questionStamp(q),status:'acquired',usageIds:[],acquired:[]};(state.queryCheckpoints??=[]).push(value);return value;
 }
 export function queryResultUsable(state:State,c:QueryCheckpoint):boolean{
-  const book=state.books.find(b=>b.id===c.bookId&&b.version===c.version),q=state.chats.find(q=>q.id===c.questionId),m=c.material;
-  if(!book||!q||!m||c.questionStamp!==questionStamp(q)||q.delivery==='answered'||c.status==='consumed'||!isEvidenceAllowed(book,m.refs)||!stampsEqual(queryMaterialStamp(state,m,c.status==='ready'?c.result:undefined),c.dependencyStamp??''))return false;
-  if(m.viewIds?.some(id=>{const view=state.publishedViews?.find(v=>v.id===id);return!view||!viewAllowed(state,book,view);}))return false;
+  const book=resolveBookVersion(state.books.find(b=>b.id===c.bookId),c.version),q=state.chats.find(q=>q.id===c.questionId),m=c.material;
+  if(!book||!q||!m||c.questionStamp!==questionStamp(q)||q.delivery==='answered'||c.status==='consumed'||!isEvidenceAllowed(book,m.refs))return false;
+  try{if(!dependencyStampsEqual(state,m,queryMaterialStamp(state,m,c.status==='ready'?c.result:undefined),c.dependencyStamp??''))return false;}
+  catch(error){if(error instanceof DependencyPreparationRequired&&error.changed)return false;throw error;}
+  const viewAllowed=publishedViewChecker({...state,partnerId:c.partnerId},book);
+  if(m.viewIds?.some(id=>{const view=state.publishedViews?.find(v=>v.id===id);return!view||!viewAllowed(view);}))return false;
   if(m.pendingHabits&&m.habitInputStamp!==pendingHabitInputStamp(state,m.pendingHabits))return false;
   const formed=queryMaterialState(state,m);
-  if([...m.memoryIds,...(m.partialMemoryIds??[])].some(id=>!formed.memories.some(x=>x.id===id&&x.bookId===book.id&&x.partnerId===c.partnerId&&!x.forgotten&&!x.invalidatedBy&&isEvidenceAllowed(book,x.evidence)))||m.chatIds.some(id=>!formed.chats.some(x=>x.id===id&&x.bookId===book.id&&chatIsTaskSource(formed,x,q)&&!x.excluded&&(!x.outdatedBy&&!x.replacedBy||m.historicalCommentIds?.includes(id)&&x.presentation==='paragraph')&&!x.futureGrant&&isEvidenceAllowed(book,x.evidence))))return false;
+  if([...m.memoryIds,...(m.partialMemoryIds??[])].some(id=>!formed.memories.some(x=>x.id===id&&x.bookId===book.id&&memoryReadableByPartner(formed,x,c.partnerId)&&!x.forgotten&&!x.invalidatedBy&&isEvidenceAllowed(book,x.evidence)))||m.chatIds.some(id=>!formed.chats.some(x=>x.id===id&&x.bookId===book.id&&chatIsTaskSource(formed,x,q)&&!x.excluded&&(!x.outdatedBy&&!x.replacedBy||m.historicalCommentIds?.includes(id)&&x.presentation==='paragraph')&&!x.futureGrant&&isEvidenceAllowed(book,x.evidence))))return false;
   if(m.originalRanges.some(r=>!isEvidenceAllowed(book,[{...r,bookId:book.id,version:book.version}])))return false;
-  if(m.passages.some(([,p])=>p.evidence.bookId!==book.id||p.evidence.version!==book.version||!covers(m.originalRanges,p.evidence)||!covers(m.refs,p.evidence)||(book.text||covers(book.residentRanges??[],p.evidence))&&bookTextSlice(book,p.evidence.start,p.evidence.end)!==p.text))return false;
+  if(m.passages.some(([,p])=>p.evidence.bookId!==book.id||!bookVersionAllowsRange(book,p.evidence.version,p.evidence)||!covers(m.originalRanges,p.evidence)||!covers(m.refs,p.evidence)||(book.text||covers(book.residentRanges??[],p.evidence))&&bookTextSlice(book,p.evidence.start,p.evidence.end)!==p.text))return false;
   const text=normalize(JSON.stringify(c.result??c.candidate));if(state.forgotten.some(f=>f.bookId===book.id&&text.includes(normalize(f.text))))return false;
   return true;
 }
@@ -59,9 +68,19 @@ export function validateQueryCheckpoints(state:State):void{
   if(state.queryCheckpoints===undefined)return;if(!Array.isArray(state.queryCheckpoints))throw Error('问题接续记录无效');
   const seen=new Set<string>();
   for(const c of state.queryCheckpoints){
-    const book=state.books.find(b=>b.id===c?.bookId&&b.version===c.version),q=state.chats.find(q=>q.id===c?.questionId&&q.role==='user');
+    const book=resolveBookVersion(state.books.find(b=>b.id===c?.bookId),c?.version),q=state.chats.find(q=>q.id===c?.questionId&&q.role==='user');
     if(!book||!q&&c.status!=='consumed'||c.id!==c.questionId||seen.has(c.questionId)||q&&!chatBelongsToPartner({...state,partnerId:c.partnerId},q)||!state.partners.some(p=>p.id===c.partnerId)||typeof c.questionStamp!=='string'||!['acquired','received','ready','consumed'].includes(c.status)||!Array.isArray(c.usageIds)||new Set(c.usageIds).size!==c.usageIds.length||c.usageIds.some(id=>!state.usage.some(u=>u.id===id&&u.questionId===c.questionId&&['main','receipt-repair'].includes(u.queryPhase??'')))||!Array.isArray(c.acquired)||q?.futureGrant)throw Error('问题接续的原问、来源或调用关联无效');
     if(c.status==='consumed'&&!/^[a-f0-9]{64}$/.test(c.questionStamp))throw Error('问题消费指纹无效');
+    if(c.messageEmojiReactionReceipts!==undefined){
+      if(!Array.isArray(c.messageEmojiReactionReceipts))throw Error('问题的消息表情回执无效');
+      const reactions=new Set<string>();
+      for(const receipt of c.messageEmojiReactionReceipts){
+        if(!receipt||Object.keys(receipt).some(key=>!['targetId','emoji','active'].includes(key))||typeof receipt.targetId!=='string'||!receipt.targetId||!isSingleEmoji(receipt.emoji)||typeof receipt.active!=='boolean')throw Error('问题的消息表情回执形态无效');
+        const key=JSON.stringify([receipt.targetId,receipt.emoji]),target=state.chats.find(chat=>chat.id===receipt.targetId);
+        if(reactions.has(key)||!target&&c.status!=='consumed'||target&&(target.bookId!==c.bookId||!['user','assistant'].includes(target.role)||!chatBelongsToPartner({...state,partnerId:c.partnerId},target)))throw Error('问题的消息表情回执重复或属于其他作品、伙伴');
+        reactions.add(key);
+      }
+    }
     if(c.limits&&(c.limits.main!=='host-admitted'&&![4,6].includes(c.limits.main)||c.limits['receipt-repair']!=='host-admitted'&&![1,2].includes(c.limits['receipt-repair'])||(['main','receipt-repair'] as const).some(p=>typeof c.limits![p]==='number'&&c.usageIds.filter(id=>state.usage.some(u=>u.id===id&&u.queryPhase===p&&u.dispatchState!=='not-dispatched')).length>(c.limits![p] as number))))throw Error('问题调用阶段进度无效');
     seen.add(c.questionId);
     if(c.pendingReceipt){
@@ -69,7 +88,7 @@ export function validateQueryCheckpoints(state:State):void{
       if(c.status==='consumed'||!u||!c.usageIds.includes(u.id)||u.questionId!==c.questionId||u.queryPhase!==p.phase||!['main','receipt-repair'].includes(p.phase)||!/^[a-f0-9]{64}$/.test(p.payloadHash)||typeof p.dependencyStamp!=='string'||u.coreReadingPayload&&u.coreReadingPayload.hash!==p.payloadHash)throw Error('问题待收原回执的调用身份无效');
       if(!p.material&&p.materialRef)validateTaskMaterialRef(p.materialRef);else validateQueryCheckpoints({...state,queryCheckpoints:[{...c,pendingReceipt:undefined,status:'received',material:p.material,dependencyStamp:p.dependencyStamp,candidate:{format:'content',text:'',transport:'json',phase:p.phase}}]});
     }
-    const range=(e:any)=>e&&e.bookId===book.id&&e.version===book.version&&Number.isSafeInteger(e.start)&&Number.isSafeInteger(e.end)&&e.start>=0&&e.end>e.start&&e.end<=bookLength(book);
+    const range=(e:any)=>e&&e.bookId===book.id&&bookVersionAllowsRange(book,e.version,e)&&Number.isSafeInteger(e.start)&&Number.isSafeInteger(e.end)&&e.start>=0&&e.end>e.start&&e.end<=bookLength(book);
     for(const a of c.acquired){if(!a||a.kind==='original'?!a||!range(a.evidence):a.kind==='memory'?typeof a.id!=='string'||!['story','opinion','question','shared','user','context','stage','state','arc'].includes(a.memoryKind)||!['full','index','partial'].includes(a.view)||a.history!==undefined&&typeof a.history!=='boolean'||a.indexQuery!==undefined&&(a.view!=='index'||a.memoryKind!=='opinion'||typeof a.indexQuery!=='string'||a.indexQuery.length>160)||typeof a.stamp!=='string':a.kind==='chat'?typeof a.id!=='string'||typeof a.stamp!=='string'||!Number.isSafeInteger(a.textStart)||!Number.isSafeInteger(a.textEnd)||a.textStart<0||a.textEnd<=a.textStart:true)throw Error('问题已取材料形态无效');}
     if(c.status==='received'||c.status==='ready'){
       if(!c.material&&c.materialRef){validateTaskMaterialRef(c.materialRef);if(!c.candidate||typeof c.dependencyStamp!=='string')throw Error('冷问题结果身份无效');continue;}
@@ -110,21 +129,21 @@ export function validateQueryCheckpoints(state:State):void{
 export async function mergeQueryCheckpoints(target:State,local:State):Promise<void>{
   if(!target.queryCheckpoints&&!local.queryCheckpoints)return;
   const values=new Map((target.queryCheckpoints??[]).map(c=>[c.questionId,c]));
-  for(const c of local.queryCheckpoints??[]){if(target.books.some(b=>b.id===c.bookId&&b.version===c.version)&&target.partners.some(p=>p.id===c.partnerId)&&target.chats.some(q=>q.id===c.questionId&&q.bookId===c.bookId))values.set(c.questionId,structuredClone(c));}
+  for(const c of local.queryCheckpoints??[]){if(target.books.some(b=>b.id===c.bookId&&bookVersionPrefixLength(b,c.version)!==undefined)&&target.partners.some(p=>p.id===c.partnerId)&&target.chats.some(q=>q.id===c.questionId&&q.bookId===c.bookId))values.set(c.questionId,structuredClone(c));}
   for(const [id,c]of values){
-    const q=local.chats.find(q=>q.id===id&&q.bookId===c.bookId),book=local.books.find(b=>b.id===c.bookId&&b.version===c.version),imported=target.chats.find(q=>q.id===id);
+    const q=local.chats.find(q=>q.id===id&&q.bookId===c.bookId),book=resolveBookVersion(local.books.find(b=>b.id===c.bookId),c.version),imported=target.chats.find(q=>q.id===id);
     if(!book||!imported||q&&q.text!==imported.text||q&&!chatBelongsToPartner({...local,partnerId:c.partnerId},q))continue;
     if(c.status==='consumed'&&c.questionStamp!==await hashText(questionStamp(imported)))continue;
     if(!q&&c.status!=='consumed')continue;
     const answers=local.chats.filter(a=>a.role==='assistant'&&a.replyTo===id);
     if(c.status!=='consumed'&&q?.delivery!=='answered'&&!answers.some(a=>!a.excluded&&!a.outdatedBy&&!a.replacedBy))continue;
     for(const chat of [...(q?[q]:[]),...answers]){const index=target.chats.findIndex(a=>a.id===chat.id),copy=structuredClone(chat);if(index<0)target.chats.push(copy);else{const saved=target.chats[index];target.chats[index]={...copy,excluded:copy.excluded||saved.excluded,outdatedBy:saved.outdatedBy??copy.outdatedBy,replacedBy:saved.replacedBy??copy.replacedBy};}}imported.delivery='answered';
-    const memoryIds=new Set([...(c.committedMemoryIds??[]),...answers.flatMap(a=>a.memoryIds??[])]),chatIds=new Set(answers.flatMap(a=>a.contextChatIds??[]));
+    const memoryIds=new Set([...(c.committedMemoryIds??[]),...answers.flatMap(a=>a.memoryIds??[])]),chatIds=new Set([...answers.flatMap(a=>a.contextChatIds??[]),...(c.messageEmojiReactionReceipts??[]).map(receipt=>receipt.targetId)]);
     const copied=new Set<string>();
     for(const memoryId of memoryIds){const m=local.memories.find(m=>m.id===memoryId&&m.bookId===c.bookId&&m.partnerId===c.partnerId);if(!m||copied.has(m.id))continue;copied.add(m.id);for(const parent of m.parents)memoryIds.add(parent);for(const chatId of m.chatIds)chatIds.add(chatId);if(m.correctionOf)memoryIds.add(m.correctionOf);if(m.stateChangeOf)memoryIds.add(m.stateChangeOf);if(m.arcChangeOf)memoryIds.add(m.arcChangeOf);if(!target.memories.some(x=>x.id===m.id))target.memories.push(structuredClone(m));}
     for(const chatId of chatIds){const chat=local.chats.find(x=>x.id===chatId&&x.bookId===c.bookId&&chatBelongsToPartner({...local,partnerId:c.partnerId},x));if(chat&&!target.chats.some(x=>x.id===chat.id))target.chats.push(structuredClone(chat));}
     if(local.entityRoots)target.entityRoots=[...new Map([...(target.entityRoots??[]),...local.entityRoots.filter(r=>r.bookId===c.bookId&&r.version===c.version&&r.partnerId===c.partnerId&&target.memories.some(m=>m.id===r.originMemoryId))].map(r=>[r.id,r])).values()];
-    values.set(id,{id,questionId:id,bookId:c.bookId,version:c.version,partnerId:c.partnerId,questionStamp:await hashText(questionStamp(q??imported)),status:'consumed',usageIds:[...c.usageIds],limits:c.limits,acquired:[],replyId:c.replyId??answers.at(-1)?.id,committedMemoryIds:c.committedMemoryIds});
+    values.set(id,{id,questionId:id,bookId:c.bookId,version:c.version,partnerId:c.partnerId,questionStamp:await hashText(questionStamp(q??imported)),status:'consumed',usageIds:[...c.usageIds],limits:c.limits,acquired:[],replyId:c.replyId??answers.at(-1)?.id,committedMemoryIds:c.committedMemoryIds,...(c.messageEmojiReactionReceipts?{messageEmojiReactionReceipts:structuredClone(c.messageEmojiReactionReceipts)}:{})});
   }
   target.queryCheckpoints=[...values.values()];
 }

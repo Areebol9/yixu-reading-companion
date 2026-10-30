@@ -1,9 +1,29 @@
 {
   "compilerOptions": {
-    "target": "ES2022", "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "module": "ESNext", "moduleResolution": "Bundler", "jsx": "react-jsx",
-    "strict": true, "noEmit": true, "allowImportingTsExtensions": true,
-    "skipLibCheck": true, "verbatimModuleSyntax": true
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "skipLibCheck": true,
+    "verbatimModuleSyntax": true,
+    "types": [
+      "node",
+      "react",
+      "react-dom"
+    ]
   },
-  "include": ["src"]
+  "include": [
+    "src/workbench/main.tsx",
+    "src/host/domain.ts",
+    "src/host/plugin.ts",
+    "src/env.d.ts"
+  ]
 }

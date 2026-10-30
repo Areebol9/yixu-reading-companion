@@ -1,3 +1,5 @@
+import {documentScope,memoryReadableByPartner,sameDocumentOwner} from './book-document-ownership.ts';
+import {bookVersionAllowsRange} from './book-versions.ts';
 import {memoryTextLength,requireMemoryText} from './memory-bodies.ts';
 import { bookLength, covers, id, mergeRanges, normalize } from './books.ts';
 import { evidence, isBackgroundMemory, isCurrentMemory, isUsableSourceVersion, isEvidenceAllowed, readableRanges ,memoryIsForgotten} from './context.ts';
@@ -90,7 +92,7 @@ export function bindStatePartMemory(state:State,book:Book,proposal:StatePartOper
   if(!proposal.memoryId)return;
   const proposed=/^t[1-9]\d*$/.test(proposal.memoryId);
   const memory=proposed?ctx.proposalSources?.get(proposal.memoryId):state.memories.find(m=>m.id===proposal.memoryId);
-  if(!memory||!proposed&&!ctx.parents.includes(memory.id)||proposed&&(!ctx.refs||memory.evidence.some(e=>e.bookId!==book.id||e.version!==book.version||!covers(ctx.refs??[],e)))||!['story','question'].includes(memory.kind)||memory.bookId!==book.id||memory.partnerId!==state.partnerId||isBackgroundMemory(memory)!==(ctx.source==='background')||!isUsableSourceVersion(state,memory)||!isEvidenceAllowed(book,memory.evidence))throw Error('状态片段只可绑定本轮完整提供或成功提出且可用的事实或完整原问');
+  if(!memory||!proposed&&!ctx.parents.includes(memory.id)||proposed&&(!ctx.refs||memory.evidence.some(e=>e.bookId!==book.id||!bookVersionAllowsRange(book,e.version,e)||!covers(ctx.refs??[],e)))||!['story','question'].includes(memory.kind)||memory.bookId!==book.id||memory.partnerId!==state.partnerId||isBackgroundMemory(memory)!==(ctx.source==='background')||!isUsableSourceVersion(state,memory)||!isEvidenceAllowed(book,memory.evidence))throw Error('状态片段只可绑定本轮完整提供或成功提出且可用的事实或完整原问');
   const body=requireMemoryText(memory),value=proposal.text;let start=proposal.start,end=proposal.end;
   if(start===undefined){
     if(value===undefined){start=0;end=body.length;}
@@ -99,20 +101,20 @@ export function bindStatePartMemory(state:State,book:Book,proposal:StatePartOper
   if(end!>body.length||value!==undefined&&body.slice(start,end)!==value||memory.kind==='question'&&(start!==0||end!==body.length)||!body.slice(start,end).trim())throw Error('状态摘录不符完整来源，原问不能剪断条件');
   return{memoryId:memory.id,start,end:end!};
 }
-function checkPartSource(state:State,book:Book,part:StatePart,source:Memory['source'],independent=false):void{
+function checkPartSource(state:State,book:Book,part:StatePart,source:Memory['source'],independent=false,internalShared=false):void{
   if(!part||typeof part.id!=='string'||!part.id||typeof part.text!=='string'||!part.text.trim()||part.text.length>1800)throw Error('状态片段身份或完整文字无效');
   if(part.sourceEvidence&&(!part.sourceEvidence.length||!isEvidenceAllowed(book,part.sourceEvidence)))throw Error('状态片段原文来源不可用');
   if(part.memoryRef){
     const ref=part.memoryRef,m=state.memories.find(m=>m.id===ref.memoryId);
-    if(!m||!['story','question'].includes(m.kind)||m.bookId!==book.id||m.partnerId!==state.partnerId||isBackgroundMemory(m)!==isBackgroundMemory({source})||!isUsableSourceVersion(state,m)||!isEvidenceAllowed(book,m.evidence)||
+    if(!m||!['story','question'].includes(m.kind)||m.bookId!==book.id||!internalShared&&!memoryReadableByPartner(state,m)||isBackgroundMemory(m)!==isBackgroundMemory({source})||!isUsableSourceVersion(state,m)||!isEvidenceAllowed(book,m.evidence)||
       !Number.isSafeInteger(ref.start)||!Number.isSafeInteger(ref.end)||ref.start<0||ref.end<=ref.start||ref.end>memoryTextLength(m)||typeof m.text==='string'&&m.text.slice(ref.start,ref.end)!==part.text||m.kind==='question'&&(ref.start!==0||ref.end!==memoryTextLength(m)))throw Error('状态片段绑定的来源版本失效，须显式重建');
   }else if(!part.sourceEvidence?.length&&!independent)throw Error('状态片段缺少明确来源');
 }
 /** An unchanged manual assertion keeps its actual human lineage, never a fabricated p citation. */
-function manualPartOrigin(state:State,book:Book,part:StatePart,memory:Pick<Memory,'parents'|'source'|'partnerId'|'evidence'>,live:boolean):boolean{
+function manualPartOrigin(state:State,book:Book,part:StatePart,memory:Pick<Memory,'parents'|'source'|'partnerId'|'evidence'|'scope'>,live:boolean):boolean{
   const seen=new Set<string>(),pending=[...memory.parents];
   while(pending.length){const key=pending.pop()!;if(seen.has(key))continue;seen.add(key);const origin=state.memories.find(m=>m.id===key);
-    if(!origin||origin.bookId!==book.id||origin.partnerId!==memory.partnerId||isBackgroundMemory(origin)!==isBackgroundMemory(memory))continue;
+    if(!origin||origin.bookId!==book.id||memory.scope!=='book'&&!memoryReadableByPartner(state,origin,memory.partnerId)||isBackgroundMemory(origin)!==isBackgroundMemory(memory))continue;
     if(origin.source==='correction'&&origin.stateProjection?.parts?.some(p=>p.id===part.id&&p.text===part.text&&!p.memoryRef&&!p.sourceEvidence?.length)&&
       origin.evidence.every(r=>covers(memory.evidence,r))&&(!live||isCurrentMemory(origin)&&isEvidenceAllowed(book,origin.evidence)))return true;
     pending.push(...origin.parents);
@@ -125,17 +127,17 @@ export function validateStateParts(state:State,book:Book,memory:Memory,live=fals
   if(p?.writeVersion!==2){if(p?.parts!==undefined||p?.end!==undefined)throw Error('旧状态不能伪装v2完整片段');return;}
   if(!Array.isArray(p.parts)||new Set(p.parts.map(x=>x?.id)).size!==p.parts.length)throw Error('状态片段列表或编号无效');
   const independent=memory.source==='correction';
-  const validRefs=(raw:unknown):raw is Evidence[]=>Array.isArray(raw)&&raw.length>0&&raw.every(r=>r&&r.bookId===book.id&&r.version===book.version&&Number.isSafeInteger(r.start)&&Number.isSafeInteger(r.end)&&r.start>=0&&r.end>r.start&&r.end<=bookLength(book)&&covers(memory.evidence,r));
+  const validRefs=(raw:unknown):raw is Evidence[]=>Array.isArray(raw)&&raw.length>0&&raw.every(r=>r&&r.bookId===book.id&&bookVersionAllowsRange(book,r.version,r)&&Number.isSafeInteger(r.start)&&Number.isSafeInteger(r.end)&&r.start>=0&&r.end>r.start&&r.end<=bookLength(book)&&covers(memory.evidence,r));
   for(const part of p.parts){
     if(!part||typeof part.id!=='string'||!part.id||part.id.length>128||typeof part.text!=='string'||!part.text.trim())throw Error('状态片段无效');
     if(part.sourceEvidence!==undefined&&!validRefs(part.sourceEvidence))throw Error('片段原文出处超出完整使用范围');
     if(part.memoryRef){
       const ref=part.memoryRef,source=state.memories.find(m=>m.id===ref.memoryId);
-      if(!source||!['story','question'].includes(source.kind)||source.bookId!==memory.bookId||source.partnerId!==memory.partnerId||isBackgroundMemory(source)!==isBackgroundMemory(memory)||
+      if(!source||!['story','question'].includes(source.kind)||source.bookId!==memory.bookId||documentScope(memory)!=='book'&&!memoryReadableByPartner(state,source,memory.partnerId)||isBackgroundMemory(source)!==isBackgroundMemory(memory)||
         !Number.isSafeInteger(ref.start)||!Number.isSafeInteger(ref.end)||ref.start<0||ref.end<=ref.start||ref.end>memoryTextLength(source)||typeof source.text==='string'&&source.text.slice(ref.start,ref.end)!==part.text||source.kind==='question'&&(ref.start!==0||ref.end!==memoryTextLength(source))||
         source.evidence.some(r=>!covers(memory.evidence,r))||!independent&&!memory.parents.includes(source.id)||live&&(!isUsableSourceVersion(state,source)||!isEvidenceAllowed(book,source.evidence)))throw Error('片段引用的完整来源版本或摘录无效');
     }else if(!part.sourceEvidence?.length&&!independent&&!manualPartOrigin(state,book,part,memory,live))throw Error('片段须有实际原文、稳定来源或未触人工前态');
-    if(live)checkPartSource(state,book,part,isBackgroundMemory(memory)?'background':memory.source,independent||!part.memoryRef&&!part.sourceEvidence?.length&&manualPartOrigin(state,book,part,memory,true));
+    if(live)checkPartSource(state,book,part,isBackgroundMemory(memory)?'background':memory.source,independent||!part.memoryRef&&!part.sourceEvidence?.length&&manualPartOrigin(state,book,part,memory,true),documentScope(memory)==='book');
   }
   if(p.status==='ended'){
     if(p.parts.length||!p.end||typeof p.end.text!=='string'||!p.end.text.trim()||!(independent&&Array.isArray(p.end.sourceEvidence)&&!p.end.sourceEvidence.length)&&!validRefs(p.end.sourceEvidence))throw Error('结束状态须为空活动片段并有完整结束收据');
@@ -159,7 +161,7 @@ export function applyStateOperations(state:State,book:Book,update:StateUpdate,pr
     // These are inherited source coordinates, not newly acquired p passages.
     // A broad knowledge fence is never substituted for an exact source.
     const inherited=fromProposal?(source?.sourceEvidence?.length?source.sourceEvidence:source?.sourceQuote?[source.sourceQuote.evidence]:[]):[];
-    if(inherited.some(e=>e.bookId!==book.id||e.version!==book.version||!covers(ctx.refs,e)||!isEvidenceAllowed(book,[e])))throw Error('本次事实的精确出处不在实际获准来源围栏内');
+    if(inherited.some(e=>e.bookId!==book.id||!bookVersionAllowsRange(book,e.version,e)||!covers(ctx.refs,e)||!isEvidenceAllowed(book,[e])))throw Error('本次事实的精确出处不在实际获准来源围栏内');
     if(fromProposal&&!inherited.length&&!selected.length)throw Error('本次事实投影须有已核验精确出处或实际原文，不能以宽围栏充当出处');
     const precise=mergeRanges([...inherited,...selected].map(({start,end})=>({start,end}))).map(r=>evidence(book,r));
     sources.push(...inherited);
@@ -186,7 +188,7 @@ function permitted(state: State, book: Book, kind: 'stage' | 'state', options: N
   if (options.through !== undefined && (!Number.isSafeInteger(options.through) || options.through < 0 || options.through > bookLength(book))) throw Error('阶段查询上界无效');
   const allowed = readableRanges(book, options.extra ?? []).map(r => ({ start: r.start, end: Math.min(r.end, options.through ?? r.end) })).filter(r => r.end > r.start);
   const scope = { ...book, known: allowed }, background = options.source === 'background';
-  return state.memories.filter(m => m.kind === kind && m.bookId === book.id && m.partnerId === state.partnerId &&
+  return state.memories.filter(m => m.kind === kind && m.bookId === book.id && memoryReadableByPartner(state,m) &&
     isBackgroundMemory(m) === background && isCurrentMemory(m) && isEvidenceAllowed(scope, m.evidence) &&
     (kind!=='state'||(()=>{try{validateStateParts(state,scope,m,true);return true;}catch{return false;}})())&&
     !memoryIsForgotten(state,m));
@@ -213,7 +215,7 @@ export function permittedStates(state: State, book: Book, options: NarrativeRead
     while (previousId && !seen.has(previousId)) {
       seen.add(previousId);
       const previous = state.memories.find(m => m.id === previousId);
-      if (!previous || previous.kind !== 'state' || previous.bookId !== book.id || previous.partnerId !== state.partnerId ||
+      if (!previous || previous.kind !== 'state' || previous.bookId !== book.id || !sameDocumentOwner(memory,previous) ||
         isBackgroundMemory(previous) !== isBackgroundMemory(memory) || previous.forgotten ||
         previous.stateProjection?.topic !== memory.stateProjection?.topic || !isEvidenceAllowed({ ...book, known: readableRanges(book, options.extra ?? []).map(r => ({ start: r.start, end: Math.min(r.end, options.through ?? r.end) })).filter(r => r.end > r.start) }, previous.evidence)) break;
       aliases.set(previous.id, memory.id); previousId = previous.correctionOf;
@@ -227,7 +229,7 @@ export function currentStates(state: State, book: Book, options: NarrativeReadOp
   const scope = { ...book, known: readableRanges(book, options.extra ?? []).map(r => ({ start: r.start, end: Math.min(r.end, options.through ?? r.end) })).filter(r => r.end > r.start) };
   // A suspended successor still advances this explicit chain. Its predecessor
   // remains readable history, rather than becoming the current state again.
-  const all = state.memories.filter(m => m.kind === 'state' && m.bookId === book.id && m.partnerId === state.partnerId &&
+  const all = state.memories.filter(m => m.kind === 'state' && m.bookId === book.id && memoryReadableByPartner(state,m) &&
     isBackgroundMemory(m) === (options.source === 'background') && !m.forgotten && isEvidenceAllowed(scope, m.evidence) &&
     !memoryIsForgotten(state,m));
   const aliases = new Map<string, string>();
@@ -236,7 +238,7 @@ export function currentStates(state: State, book: Book, options: NarrativeReadOp
     const seen = new Set<string>();
     while (key && !seen.has(key)) {
       seen.add(key);
-      const previous = all.find(m => m.id === key && m.stateProjection?.topic === memory.stateProjection?.topic);
+      const previous = all.find(m => m.id === key && sameDocumentOwner(m,memory) && m.stateProjection?.topic === memory.stateProjection?.topic);
       if (!previous) break;
       aliases.set(previous.id, memory.id); key = previous.correctionOf;
     }
@@ -259,7 +261,7 @@ export function stageOriginalRanges(state: State, book: Book, memoryId: string, 
 export function planNarrativeMemories(state: State, book: Book, reply: ReadingReply, ctx: NarrativePlanContext): Memory[] {
   const narrative = parseStageNarrative(reply.stageNarrative), writeVersion=ctx.stateWriteVersion??1, updates = parseStateUpdates(reply.stateUpdates,writeVersion) ?? [];
   if (!narrative && !updates.length) return [];
-  const ranges = mergeRanges(ctx.readingStage.map(({start,end})=>({start,end}))), refs = mergeRanges([...ctx.refs, ...ctx.parents.flatMap(parent => state.memories.find(m => m.id === parent)?.evidence ?? [])].filter(r => r.bookId === book.id && r.version === book.version).map(({start,end})=>({start,end}))).map(r => evidence(book, r));
+  const ranges = mergeRanges(ctx.readingStage.map(({start,end})=>({start,end}))), refs = mergeRanges([...ctx.refs, ...ctx.parents.flatMap(parent => state.memories.find(m => m.id === parent)?.evidence ?? [])].filter(r => r.bookId === book.id && bookVersionAllowsRange(book,r.version,r)).map(({start,end})=>({start,end}))).map(r => evidence(book, r));
   if (!ranges.length || ranges.some(r => !covers(refs, r) || !covers(ctx.originalRanges, r)) || !isEvidenceAllowed(book, refs)) throw Error('阶段形成范围超出本轮完整获准原文');
   const added: Memory[] = [], validText = (value: string) => !state.forgotten.some(f => f.bookId === book.id && normalize(value).includes(normalize(f.text)));
   const make = (kind: 'stage' | 'state', value: string, parents: string[], sources?: string[]): Memory => {
@@ -318,12 +320,12 @@ export function validateStageStateMemories(state: State): void {
     if (m.kind === 'stage') {
       if (m.stateProjection !== undefined || m.stateChangeOf !== undefined || typeof m.stageNarrative!.continues !== 'boolean') throw Error('阶段叙事元数据无效');
       const previous = m.stageNarrative!.previousStageId ? memories.get(m.stageNarrative!.previousStageId) : undefined;
-      if (m.stageNarrative!.previousStageId && (!previous || previous.kind !== 'stage' || previous.id === m.id || previous.bookId !== m.bookId || previous.partnerId !== m.partnerId || isBackgroundMemory(previous) !== isBackgroundMemory(m) || Math.max(...previous.stageNarrative!.ranges.map(r => r.end)) > ranges[0].start)) throw Error('阶段前后关系无效');
+      if (m.stageNarrative!.previousStageId && (!previous || previous.kind !== 'stage' || previous.id === m.id || previous.bookId !== m.bookId || !sameDocumentOwner(m,previous) || isBackgroundMemory(previous) !== isBackgroundMemory(m) || Math.max(...previous.stageNarrative!.ranges.map(r => r.end)) > ranges[0].start)) throw Error('阶段前后关系无效');
     } else {
       const projection = m.stateProjection!;
       if (m.stageNarrative !== undefined || typeof projection.topic !== 'string' || !projection.topic.trim() || projection.topic !== projection.topic.trim() || projection.topic.length > 80 || !['active', 'ended'].includes(projection.status) || projection.status === 'ended' && !m.stateChangeOf || JSON.stringify(mergeRanges(projection.asOf.map(({start,end})=>({start,end})))) !== JSON.stringify(mergeRanges(m.evidence.map(({start,end})=>({start,end}))))) throw Error('状态投影元数据无效');
       const previous = m.stateChangeOf ? memories.get(m.stateChangeOf) : undefined;
-      if (m.stateChangeOf && (!previous || previous.kind !== 'state' || previous.id === m.id || previous.bookId !== m.bookId || previous.partnerId !== m.partnerId || isBackgroundMemory(previous) !== isBackgroundMemory(m) || previous.stateProjection?.topic !== projection.topic || !independentRevision && !m.parents.includes(previous.id) || previous.stateProjection.asOf.some(r => !covers(ranges, r)))) throw Error('状态继起关系无效');
+      if (m.stateChangeOf && (!previous || previous.kind !== 'state' || previous.id === m.id || previous.bookId !== m.bookId || !sameDocumentOwner(m,previous) || isBackgroundMemory(previous) !== isBackgroundMemory(m) || previous.stateProjection?.topic !== projection.topic || !independentRevision && !m.parents.includes(previous.id) || previous.stateProjection.asOf.some(r => !covers(ranges, r)))) throw Error('状态继起关系无效');
       const seen = new Set<string>([m.id]); let cursor = previous;
       while (cursor) { if (seen.has(cursor.id)) throw Error('状态继起关系循环'); seen.add(cursor.id); cursor = memories.get(cursor.stateChangeOf ?? ''); }
       validateStateParts(state,book,m);

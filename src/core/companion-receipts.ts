@@ -1,8 +1,15 @@
+import {memoryReadableByPartner} from './book-document-ownership.ts';
+import {linkDependencyProjectionOwners} from './dependency-nodes.ts';
+import {bookVersionPrefixLength} from './book-versions.ts';
+import {resolveBookVersion,bookVersionAllowsRange,bookVersionAllowsRanges} from './book-versions.ts';
+import {dependencyStampsEqual} from './dependency-chat-sources.ts';
 import {stampsEqual} from './memory-identity.ts';
+import {inheritDependencyPreparation,DependencyPreparationRequired} from './dependency-nodes.ts';
 import {maintenanceTaskCommitted} from './maintenance-dispatch.ts';
+import {ordinaryReadingTask} from './terminated-reading-continuation.ts';
 import {viewAllowed} from './published-views.ts';
 import {validateTaskMaterialRef} from './storage-records.ts';
-import {validateMaterialProjection} from './material-projection.ts';
+import {validateMaterialProjection,isNonOriginalMaintenanceTask} from './material-projection.ts';
 import {isWorkspaceVersion} from './types.ts';
 import { completeSubmitObject } from './agent-port.ts';
 import {isNaturalReadingText,readingLegacySubmitBody} from './reading-output.ts';
@@ -20,7 +27,7 @@ type Candidate = CompanionReadingReceipt['candidate'];
 const requests = ['read','lookup','recall','history','search','readPage'];
 const normalizedRanges = (ranges:ReadingDraftRequest['ranges']) => JSON.stringify(mergeRanges(ranges));
 const sameRequest = (a:ReadingDraftRequest,b:ReadingDraftRequest) => a.source===b.source && a.input===b.input && a.maintenanceJobId===b.maintenanceJobId&&a.maintenanceClaim===b.maintenanceClaim&&JSON.stringify(a.sceneCommentIds??[])===JSON.stringify(b.sceneCommentIds??[])&&normalizedRanges(a.ranges)===normalizedRanges(b.ranges);
-const belongs = (state:State,r:CompanionReadingReceipt) => state.books.some(b=>b.id===r.bookId&&b.version===r.version)&&state.partners.some(p=>p.id===r.partnerId);
+const belongs = (state:State,r:CompanionReadingReceipt) => state.books.some(b=>b.id===r.bookId&&bookVersionPrefixLength(b,r.version)!==undefined)&&state.partners.some(p=>p.id===r.partnerId);
 const sameReceiptTask = (a:CompanionReadingReceipt,b:CompanionReadingReceipt) => a.requestKey===b.requestKey&&a.bookId===b.bookId&&a.version===b.version&&a.partnerId===b.partnerId&&
   a.request.source===b.request.source&&a.request.input===b.request.input&&JSON.stringify(a.request.ranges)===JSON.stringify(b.request.ranges);
 
@@ -77,7 +84,11 @@ function validUsage(state:State,r:CompanionReadingReceipt):boolean {
   if(!usage||usage.status!=='complete'||usage.dispatchState!=='response-received'||usage.requestKey!==r.requestKey)return false;
   try{
     const key=JSON.parse(r.requestKey);
-    return Array.isArray(key)&&(r.request.correctionRepairId?key.length===6&&key[5]===r.request.correctionRepairId:r.request.maintenanceJobId?key.length===8&&key[5]==='maintenance'&&key[6]===r.request.maintenanceJobId&&key[7]===r.request.maintenanceClaim:r.request.sceneCommentIds?.length?key.length===7&&key[5]==='scene'&&JSON.stringify(key[6])===JSON.stringify(r.request.sceneCommentIds):r.material?.taskRole?key.length===6&&key[5]===r.material.taskRole:key.length===5||!r.material&&!!r.materialRef&&key.length===6&&['scene','maintenance'].includes(key[5]))&&key[0]===r.bookId&&key[1]===r.version&&key[2]===r.partnerId&&key[3]===r.request.source&&JSON.stringify(key[4])===JSON.stringify(r.request.ranges.map(({start,end})=>({start,end})));
+    if(Array.isArray(key)&&key[5]==='scene'){
+      const task=ordinaryReadingTask(r.requestKey);
+      return !!task&&!r.request.correctionRepairId&&!r.request.maintenanceJobId&&JSON.stringify(task.sceneCommentIds)===JSON.stringify(r.request.sceneCommentIds??[])&&task.bookId===r.bookId&&task.version===r.version&&task.partnerId===r.partnerId&&task.source===r.request.source&&JSON.stringify(task.ranges)===JSON.stringify(r.request.ranges.map(({start,end})=>({start,end})));
+    }
+    return Array.isArray(key)&&(r.request.correctionRepairId?key.length===6&&key[5]===r.request.correctionRepairId:r.request.maintenanceJobId?key.length===8&&key[5]==='maintenance'&&key[6]===r.request.maintenanceJobId&&key[7]===r.request.maintenanceClaim:r.request.sceneCommentIds?.length?false:r.material?.taskRole?key.length===6&&key[5]===r.material.taskRole:key.length===5||!r.material&&!!r.materialRef&&key.length===6&&key[5]==='maintenance')&&key[0]===r.bookId&&key[1]===r.version&&key[2]===r.partnerId&&key[3]===r.request.source&&JSON.stringify(key[4])===JSON.stringify(r.request.ranges.map(({start,end})=>({start,end})));
   }catch{return false;}
 }
 
@@ -89,6 +100,9 @@ function consumed(state:State,r:CompanionReadingReceipt,seen=new Set<string>()):
     state.readings?.some(d=>(d.draftId===r.id||d.source===r.request.source&&d.supersededReceiptIds?.includes(r.id))&&d.bookId===r.bookId&&d.version===r.version&&d.partnerId===r.partnerId))return true;
   return (state.companionReadingReceipts??[]).some(next=>next.supersedesId===r.id&&sameReceiptTask(next,r)&&validUsage(state,next)&&consumed(state,next,seen));
 }
+
+/** Includes the original receipt and its actual submitted successors. */
+export function consumedCompanionReadingReceipt(state:State,receipt:CompanionReadingReceipt):boolean{return consumed(state,receipt);}
 
 /** Record before checking Abort/current-task state; changed sources become blocked. */
 export function receiveCompanionReadingReceipt(state:State,book:Book,request:ReadingDraftRequest,requestKey:string,usageId:string,material:QueryMaterial,stamp:string,response:ModelReply|AgentModelReply,supersedesId?:string):CompanionReadingReceipt|undefined {
@@ -105,6 +119,7 @@ export function receiveCompanionReadingReceipt(state:State,book:Book,request:Rea
     request:structuredClone(request),
     material:structuredClone({...material,messages:material.messages.filter(m=>m.role==='user').map(m=>({role:'user' as const,content:m.content}))}),
     dependencyStamp:stamp,candidate,status:'received',createdAt:Date.now()};
+  inheritDependencyPreparation(material,value.material);
   if(!validUsage(state,value))throw Error('伴读原答须关联同一已收到完整回执的实际调用');
   const validation={...state,companionReadingReceipts:[...(state.companionReadingReceipts??[]),value]};validateCompanionReadingReceipts(validation);
   if(consumed(state,value))return;
@@ -114,38 +129,41 @@ export function receiveCompanionReadingReceipt(state:State,book:Book,request:Rea
 
 /** Return blocked receipts too, so a caller cannot mistake them for unrequested work. */
 export function matchingCompanionReadingReceipt(state:State,book:Book,request:ReadingDraftRequest,requestKey?:string):CompanionReadingReceipt|undefined {
-  return (state.companionReadingReceipts??[]).filter(r=>r.bookId===book.id&&r.version===book.version&&r.partnerId===state.partnerId&&
+  return (state.companionReadingReceipts??[]).filter(r=>r.bookId===book.id&&bookVersionAllowsRanges(book,r.version,r.request.ranges)&&r.partnerId===state.partnerId&&
     (!requestKey||r.requestKey===requestKey)&&sameRequest(r.request,request)&&!consumed(state,r)&&!superseded(state,r)).sort((a,b)=>b.createdAt-a.createdAt).at(0);
 }
 
 export function companionReadingReceiptUsable(state:State,r:CompanionReadingReceipt):boolean {
+  if(state.partnerId!==r.partnerId){const scoped={...state,partnerId:r.partnerId};linkDependencyProjectionOwners(scoped,state);state=scoped;}
   if(!r.material)return false;
   try{
-    const book=state.books.find(b=>b.id===r.bookId&&b.version===r.version),m=r.material;
+    const book=resolveBookVersion(state.books.find(b=>b.id===r.bookId),r.version),m=r.material;
     if(m.correctionRepairId&&(m.correctionRepairId!==r.request.correctionRepairId||!state.companionCorrectionRepairs?.some(p=>p.id===m.correctionRepairId&&correctionRepairUsable(state,p))))return false;
     if(!book||!belongs(state,r)||r.status!=='received'||!validUsage(state,r)||consumed(state,r)||superseded(state,r)||!['companion','full-original','structured'].includes(m.readingStrategy??'')||m.narrativeMode==='stages')return false;
+    const nonOriginalMaintenance=!r.request.ranges.length&&isNonOriginalMaintenanceTask({...state,partnerId:r.partnerId},book,r.request,m);
+    if(!r.request.ranges.length&&!nonOriginalMaintenance)return false;
     const scope=draftBook(book,r.request),formed=queryMaterialState(state,m),background=r.request.source==='background';
-    if(!isEvidenceAllowed(scope,m.refs)||!isEvidenceAllowed(scope,r.request.ranges.map(range=>({...range,bookId:book.id,version:book.version})))||!stampsEqual(queryMaterialStamp(state,m),r.dependencyStamp))return false;
+    if(!isEvidenceAllowed(scope,m.refs)||!nonOriginalMaintenance&&!isEvidenceAllowed(scope,r.request.ranges.map(range=>({...range,bookId:book.id,version:book.version})))||!dependencyStampsEqual(state,m,queryMaterialStamp(state,m),r.dependencyStamp))return false;
     if(m.viewIds?.some(id=>{const view=state.publishedViews?.find(v=>v.id===id);return!view||!viewAllowed(state,scope,view);}))return false;
     if(m.pendingHabits&&m.habitInputStamp!==pendingHabitInputStamp(state,m.pendingHabits))return false;
-    if([...m.memoryIds,...(m.partialMemoryIds??[])].some(id=>!formed.memories.some(x=>x.id===id&&x.bookId===book.id&&x.partnerId===r.partnerId&&!x.forgotten&&!x.invalidatedBy&&
+    if([...m.memoryIds,...(m.partialMemoryIds??[])].some(id=>!formed.memories.some(x=>x.id===id&&x.bookId===book.id&&memoryReadableByPartner(formed,x,r.partnerId)&&!x.forgotten&&!x.invalidatedBy&&
       isBackgroundMemory(x)===background&&isEvidenceAllowed(scope,x.evidence)))||m.chatIds.some(id=>!formed.chats.some(x=>x.id===id&&x.bookId===book.id&&chatBelongsToPartner({...formed,partnerId:r.partnerId},x)&&chatAllowsMemory(formed,x)&&!x.excluded&&(!x.outdatedBy&&!x.replacedBy||m.historicalCommentIds?.includes(id)&&x.presentation==='paragraph')&&!x.futureGrant&&isEvidenceAllowed(scope,x.evidence))))return false;
     if(m.habitIds.some(id=>!formed.habits?.some(h=>h.id===id&&h.partnerId===r.partnerId&&!h.forgotten&&!h.retiredBy&&!h.invalidatedBy)))return false;
     if(m.originalRanges.some(range=>!isEvidenceAllowed(scope,[{...range,bookId:book.id,version:book.version}])))return false;
-    if(m.passages.some(([,p])=>p.evidence.bookId!==book.id||p.evidence.version!==book.version||!covers(m.originalRanges,p.evidence)||!covers(m.refs,p.evidence)||hasBookText(book)&&book.text.slice(p.evidence.start,p.evidence.end)!==p.text))return false;
+    if(m.passages.some(([,p])=>p.evidence.bookId!==book.id||!bookVersionAllowsRange(book,p.evidence.version,p.evidence)||!covers(m.originalRanges,p.evidence)||!covers(m.refs,p.evidence)||hasBookText(book)&&book.text.slice(p.evidence.start,p.evidence.end)!==p.text))return false;
     const text=normalize(JSON.stringify([r.candidate,m.messages]));if(state.forgotten.some(f=>f.bookId===book.id&&text.includes(normalize(f.text))))return false;
     // workspaceRevision is formation metadata, not a source dependency. A newer
     // foreground handoff prevents publication in the engine, not raw recovery.
     return true;
-  }catch{return false;}
+  }catch(error){if(error instanceof DependencyPreparationRequired&&!error.changed)throw error;return false;}
 }
 
 export function validateCompanionReadingReceipts(state:State):void {
   if(state.companionReadingReceipts===undefined)return;
   if(!Array.isArray(state.companionReadingReceipts)||state.companionReadingReceipts.length>1500)throw Error('伴读原答回执记录无效');
-  const seen=new Set<string>(),ids=(v:unknown):v is string[]=>Array.isArray(v)&&v.length<=256&&v.every(x=>typeof x==='string'&&!!x&&x.length<=128);
+  const seen=new Set<string>(),ids=(v:unknown):v is string[]=>Array.isArray(v)&&v.every(x=>typeof x==='string'&&!!x&&x.length<=128);
   for(const r of state.companionReadingReceipts){
-    const book=state.books.find(b=>b.id===r?.bookId&&b.version===r.version),m=r?.material;
+    const book=resolveBookVersion(state.books.find(b=>b.id===r?.bookId),r?.version),m=r?.material;
     if(!r||typeof r.id!=='string'||!r.id||seen.has(r.id)||Object.keys(r).some(k=>!['id','requestKey','bookId','version','partnerId','supersedesId','request','material','materialRef','dependencyStamp','candidate','status','createdAt','blockedReason'].includes(k)))throw Error('伴读原答回执身份无效');
     seen.add(r.id);
     // Deleted scopes are tombstoned by pruning. A stale receipt must not make
@@ -155,18 +173,19 @@ export function validateCompanionReadingReceipts(state:State):void {
     if(m)validateMaterialProjection({...state,partnerId:r.partnerId},book,m);
     if(r.request.maintenanceJobId!==undefined&&(typeof r.request.maintenanceJobId!=='string'||!r.request.maintenanceJobId||typeof r.request.maintenanceClaim!=='string'||!/^[a-f0-9]{64}$/.test(r.request.maintenanceClaim)||m.taskRole!=='maintenance'||m.maintenanceJobId!==r.request.maintenanceJobId)||r.request.maintenanceClaim!==undefined&&!r.request.maintenanceJobId)throw Error('维护回执的原任务或claim身份无效');
     const ranges=(value:unknown):boolean=>Array.isArray(value)&&value.length<=5000&&value.every(x=>x&&Number.isSafeInteger(x.start)&&Number.isSafeInteger(x.end)&&x.start>=0&&x.end>x.start&&x.end<=bookLength(book!));
+    const nonOriginalMaintenance=!!m&&isNonOriginalMaintenanceTask({...state,partnerId:r.partnerId},book,r.request,m);
     if(!validUsage(state,r)||
       !['received','blocked'].includes(r.status)||!Number.isFinite(r.createdAt)||r.createdAt<0||typeof r.dependencyStamp!=='string'||
       r.blockedReason!==undefined&&typeof r.blockedReason!=='string'||!r.request||!['preparation','reading','background'].includes(r.request.source)||
-      typeof r.request.input!=='string'||r.request.input.length>30000||!ranges(r.request.ranges)||!r.request.ranges.length||!m||!['companion','full-original','structured'].includes(m.readingStrategy??'')||m.narrativeMode==='stages'||
-      !ranges(m.refs)||m.refs.some(e=>e.bookId!==book.id||e.version!==book.version)||!ranges(m.originalRanges)||!ranges(m.ranges)||!ids(m.memoryIds)||!ids(m.partialMemoryIds??[])||!ids(m.chatIds)||!ids(m.habitIds)||
-      !Array.isArray(m.messages)||m.messages.length>64||m.messages.some(x=>x?.role!=='user'||typeof x.content!=='string'||Object.keys(x).some(k=>!['role','content'].includes(k)))||
-      !Array.isArray(m.passages)||m.passages.length>10000||!Array.isArray(m.webSources)||m.webSources.length>10||!Array.isArray(m.readUrls)||m.readUrls.some(x=>typeof x!=='string')||
+      typeof r.request.input!=='string'||r.request.input.length>30000||!ranges(r.request.ranges)||!r.request.ranges.length&&!nonOriginalMaintenance||!m||!['companion','full-original','structured'].includes(m.readingStrategy??'')||m.narrativeMode==='stages'||
+      !ranges(m.refs)||m.refs.some(e=>e.bookId!==book.id||!bookVersionAllowsRange(book,e.version,e))||!ranges(m.originalRanges)||!ranges(m.ranges)||!ids(m.memoryIds)||!ids(m.partialMemoryIds??[])||!ids(m.chatIds)||!ids(m.habitIds)||
+      !Array.isArray(m.messages)||m.messages.some(x=>x?.role!=='user'||typeof x.content!=='string'||Object.keys(x).some(k=>!['role','content'].includes(k)))||
+      !Array.isArray(m.passages)||!Array.isArray(m.webSources)||m.webSources.length>10||!Array.isArray(m.readUrls)||m.readUrls.some(x=>typeof x!=='string')||
       !r.candidate||!['agent','json'].includes(r.candidate.transport)||!['submit','content','reading-text'].includes(r.candidate.format)||typeof r.candidate.text!=='string'||!r.candidate.text.trim()&&!r.candidate.finalText||r.candidate.text.length>100000||r.candidate.finalText!==undefined&&(r.candidate.format!=='submit'||typeof r.candidate.finalText!=='string'||!isNaturalReadingText(r.candidate.finalText))||
       r.candidate.proposal!==undefined&&(r.candidate.format!=='reading-text'||typeof r.candidate.proposal!=='string')||r.candidate.format==='reading-text'&&(r.candidate.transport!=='agent'||!['reading-text-v1','reading-documents-v1'].includes(m.outputProtocol??''))||m.outputProtocol!==undefined&&!['reading-text-v1','reading-documents-v1'].includes(m.outputProtocol??'')||
       r.candidate.reaction!==undefined&&(r.candidate.format!=='reading-text'||typeof r.candidate.reaction!=='string')||
       m.outputReactionAllowed!==undefined&&(m.outputReactionAllowed!==true||!['reading-text-v1','reading-documents-v1'].includes(m.outputProtocol??'')||r.request.source!=='reading')||
-      Object.keys(r.candidate).some(k=>!['transport','format','text','finalText','proposal','reaction'].includes(k))||JSON.stringify(r).length>2000000)throw Error('伴读原答回执的任务、调用或形成材料无效');
+      Object.keys(r.candidate).some(k=>!['transport','format','text','finalText','proposal','reaction'].includes(k)))throw Error('伴读原答回执的任务、调用或形成材料无效');
     if(m.narrativeMode!==undefined&&!['legacy','stages'].includes(m.narrativeMode)||m.stateWriteVersion!==undefined&&![1,2].includes(m.stateWriteVersion)||
       m.arcCandidate!==undefined&&m.arcCandidate!=='v1'||m.worldCandidate!==undefined&&m.worldCandidate!=='v1'||m.analysisTask!==undefined&&m.analysisTask!==true||
       m.sourceStampVersion!==undefined&&m.sourceStampVersion!==2||m.outputProtocol==='reading-documents-v1'&&m.readingStrategy!=='companion'||m.basisStampVersion!==undefined&&m.basisStampVersion!==1||m.workspaceRevision!==undefined&&(!Number.isSafeInteger(m.workspaceRevision)||m.workspaceRevision<0)||
@@ -174,7 +193,7 @@ export function validateCompanionReadingReceipts(state:State):void {
       (m.workspaceRevision!==undefined||m.workspaceSource!==undefined||m.workspaceVersion!==undefined)&&m.readingStrategy!=='companion'||
       m.workspaceSource!==undefined&&m.workspaceSource!==(r.request.source==='background'?'background':'reading')||
       m.historicalSourceIds!==undefined&&(!ids(m.historicalSourceIds)||m.historicalSourceIds.some(id=>!m.memoryIds.includes(id))))throw Error('伴读原答回执的原模式无效');
-    for(const [key,p]of m.passages)if(!/^p[1-9]\d*$/.test(key)||typeof p?.text!=='string'||p.text.length>200||!ranges([p.evidence])||p.evidence.bookId!==book.id||p.evidence.version!==book.version||!covers(m.originalRanges,p.evidence)||!covers(m.refs,p.evidence))throw Error('伴读原答原文编号无效');
+    for(const [key,p]of m.passages)if(!/^p[1-9]\d*$/.test(key)||typeof p?.text!=='string'||p.text.length>200||!ranges([p.evidence])||p.evidence.bookId!==book.id||!bookVersionAllowsRange(book,p.evidence.version,p.evidence)||!covers(m.originalRanges,p.evidence)||!covers(m.refs,p.evidence))throw Error('伴读原答原文编号无效');
     if(!m.references||Object.keys(m.references).length!==5||Object.keys(m.references).some(k=>!['memory','chat','habit','part','entity'].includes(k)))throw Error('伴读原答缺少完整原引用字典');new ReadingReferences().restore(m.references);
     for(const w of m.webSources)publicWebUrl(w.url);
     if(r.supersedesId!==undefined&&(typeof r.supersedesId!=='string'||!r.supersedesId||r.supersedesId.length>128))throw Error('伴读原答替代编号无效');
@@ -197,9 +216,10 @@ export function pruneCompanionReadingReceipts(state:State):boolean {
 /** Local raw receipts and local consumption survive an older imported snapshot. */
 export function mergeCompanionReadingReceipts(target:State,local:State):void {
   if(!target.companionReadingReceipts&&!local.companionReadingReceipts)return;
-  const values=new Map((target.companionReadingReceipts??[]).map(r=>[r.id,structuredClone(r)]));
+  const clone=(receipt:CompanionReadingReceipt)=>{const copy=structuredClone(receipt);if(receipt.material&&copy.material)inheritDependencyPreparation(receipt.material,copy.material);return copy;};
+  const values=new Map((target.companionReadingReceipts??[]).map(r=>[r.id,clone(r)]));
   for(const r of local.companionReadingReceipts??[])if(belongs(target,r)){
-    const previous=values.get(r.id),copy=structuredClone(r);
+    const previous=values.get(r.id),copy=clone(r);
     if(previous?.status==='blocked'){copy.status='blocked';copy.blockedReason=copy.blockedReason??previous.blockedReason;}
     values.set(r.id,copy);
   }

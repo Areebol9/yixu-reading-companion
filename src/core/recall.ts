@@ -1,3 +1,4 @@
+import {documentScope} from './book-document-ownership.ts';
 import {entityMemories,permittedWorldMemories,visibleWorldMemory,worldNote} from './world-identity.ts';
 import {currentArcs,permittedArcs} from './arc-state.ts';
 import { normalize } from './books.ts';
@@ -44,7 +45,7 @@ function literalOpinionMatch(text:string,query:string):OrdinaryMemoryIndex['matc
 }
 /** A navigation projection only; it never supplies complete-record authority. */
 export function ordinaryMemoryIndex(memory:Memory,query?:string,navigation?:OpinionIndexNavigation,history=false):OrdinaryMemoryIndex{
-  const result:OrdinaryMemoryIndex={id:memory.id,kind:memory.kind,readingStage:memory.readingStage,...(history?{history:true}: {})};
+  const result:OrdinaryMemoryIndex&{scope?:Memory['scope'];partnerId:string}={id:memory.id,kind:memory.kind,scope:memory.scope,partnerId:memory.partnerId,readingStage:memory.readingStage,...(history?{history:true}: {})};
   if(memory.kind!=='opinion'||!navigation)return result;
   if(isBackgroundMemory(memory))result.origin='background';
   if(typeof memory.text==='string'&&navigation.currentUnderstanding?.id===memory.id&&navigation.currentUnderstanding.text===memory.text)result.currentAlreadyProvided=true;
@@ -80,7 +81,7 @@ function connectPartialAnswers<T extends {memory:Memory;score:number}>(items:T[]
 }
 
 /** Local, book-scoped search. Filter permissions before matching, counting or paging. */
-export function searchMemories(state: State, book: Book, request: MemoryQuery, extra: Range[] = [], source: Memory['source'] = 'reading',strategy:ReadingStrategy='structured',scope:{analysis?:boolean;arcCandidate?:ArcCandidate;worldCandidate?:'v1';relationHistoryIds?:readonly string[];opinionNavigation?:OpinionIndexNavigation}={}): { items: Memory[]; total: number; nextOffset?: number;relations?:StructureRelationIndex;historicalIds?:string[];remainingIds?:string[];unavailableIds?:string[];unloadedBodyIds?:string[];searchScope?:'metadata-and-loaded-bodies' } {
+export function searchMemories(state: State, book: Book, request: MemoryQuery, extra: Range[] = [], source: Memory['source'] = 'reading',strategy:ReadingStrategy='structured',scope:{analysis?:boolean;arcCandidate?:ArcCandidate;worldCandidate?:'v1';relationHistoryIds?:readonly string[];opinionNavigation?:OpinionIndexNavigation}={}): { items: Memory[]; total: number; nextOffset?: number;relations?:StructureRelationIndex;historicalIds?:string[];remainingIds?:string[];unavailableIds?:string[];unloadedBodyIds?:string[];searchScope?:'metadata-and-loaded-bodies';searchedKinds?:Memory['kind'][];documentScope?:'book-and-current-partner' } {
   if (request.view !== undefined && (strategy!=='companion'&&!['stage','state','arc'].includes(request.kind ?? '')&&!request.entityIds&&!request.relations || !['index','full'].includes(request.view))) throw Error('轻目录仅用于结构或关系检索');
   const relationScope={source,extra,readingStrategy:strategy,arcCandidate:scope.arcCandidate,worldCandidate:scope.worldCandidate};
   if(request.relations){
@@ -98,7 +99,9 @@ export function searchMemories(state: State, book: Book, request: MemoryQuery, e
   const history=strategy==='companion'&&(request.worldView==='history'||!!request.ids)?permittedWorldMemories(state,book,{source,extra,history:true}).filter(m=>!hasWorld(m)):[];
   const ordinary=[...new Map([...history,...usableMemories(state,book,extra).filter(m=>!hasWorld(m)),...permittedWorldMemories(state,book,{source,extra,history:request.worldView==='history'||!!request.ids}).filter(hasWorld)].map(m=>[m.id,m])).values()].filter(m=>m.kind!=='stage'&&m.kind!=='state'&&m.kind!=='arc');
   const samePool=scope.analysis&&!request.kind&&!request.ids&&!request.entityIds&&request.worldView!=='history'&&request.stateView!=='history'&&request.arcView!=='history';
-  const eligible = request.entityIds?entityMemories(state,book,request.entityIds,{source,extra,history:request.worldView==='history'}):strategy==='full-original'?usableMemories(state,book,extra).filter(m=>strategyMemoryAllowed(state,m,strategy)):request.kind==='context'?historicalReadingBriefs(state,book,extra):request.kind==='stage'?permittedStages(state,book,narrativeOptions):request.kind==='arc'?(request.arcView==='history'||request.ids?permittedArcs:currentArcs)(state,book,narrativeOptions):request.kind==='state'?(request.stateView==='history'||request.ids?permittedStates:currentStates)(state,book,narrativeOptions):request.ids?[...ordinary,...permittedStages(state,book,narrativeOptions),...permittedStates(state,book,narrativeOptions),...permittedArcs(state,book,narrativeOptions)]:samePool?analysisCandidatePool(state,book,{source,extra,readingStrategy:strategy,arcCandidate:scope.arcCandidate,worldCandidate:scope.worldCandidate}).all:ordinary;
+  const companionStages=strategy==='companion'&&request.kind==='stage';
+  const stageCandidates=[...permittedStages(state,book,narrativeOptions),...(companionStages?ordinary.filter(memory=>memory.kind==='opinion'&&documentScope(memory)==='book'&&isBackgroundMemory(memory)===(source==='background')):[])];
+  const eligible = request.entityIds?entityMemories(state,book,request.entityIds,{source,extra,history:request.worldView==='history'}):strategy==='full-original'?usableMemories(state,book,extra).filter(m=>strategyMemoryAllowed(state,m,strategy)):request.kind==='context'?historicalReadingBriefs(state,book,extra):request.kind==='stage'?stageCandidates:request.kind==='arc'?(request.arcView==='history'||request.ids?permittedArcs:currentArcs)(state,book,narrativeOptions):request.kind==='state'?(request.stateView==='history'||request.ids?permittedStates:currentStates)(state,book,narrativeOptions):request.ids?[...ordinary,...permittedStages(state,book,narrativeOptions),...permittedStates(state,book,narrativeOptions),...permittedArcs(state,book,narrativeOptions)]:samePool?analysisCandidatePool(state,book,{source,extra,readingStrategy:strategy,arcCandidate:scope.arcCandidate,worldCandidate:scope.worldCandidate}).all:ordinary;
   const relationGraph=request.ids&&scope.relationHistoryIds?.length?projectStructureRelations(state,book,relationScope):undefined;
   const historicalGranted=relationGraph?request.ids!.filter(id=>scope.relationHistoryIds!.includes(id)&&relationGraph.memories.has(id)&&relationGraph.edges.some(e=>e.ownerId===id||e.from.kind==='memory'&&e.from.id===id||e.to.kind==='memory'&&e.to.id===id)).map(id=>relationGraph.memories.get(id)!):[];
   const versions=new Map(state.memories.map(m=>[m.id,m]));
@@ -113,8 +116,8 @@ export function searchMemories(state: State, book: Book, request: MemoryQuery, e
     for (const word of words) if (indexed.has(word)) score += 1 / Math.max(1, words.size);
     return { memory, score };
   })).filter(({ memory, score }) => (!query || score > 0) && (!requested || requested.has(memory.id)) &&
-    (!request.kind || memory.kind === request.kind) && (request.chapterIndex === undefined || membership?.get(memory.id)?.has(request.chapterIndex)))
-    .sort((a, b) => request.kind==='stage'?Math.min(...a.memory.stageNarrative!.ranges.map(r=>r.start))-Math.min(...b.memory.stageNarrative!.ranges.map(r=>r.start))||a.memory.createdAt-b.memory.createdAt:b.score - a.score || b.memory.createdAt - a.memory.createdAt || a.memory.id.localeCompare(b.memory.id));
+    (!request.kind || memory.kind === request.kind || companionStages&&memory.kind==='opinion'&&documentScope(memory)==='book') && (request.chapterIndex === undefined || membership?.get(memory.id)?.has(request.chapterIndex)))
+    .sort((a, b) => request.kind==='stage'&&!companionStages?Math.min(...(a.memory.stageNarrative?.ranges??a.memory.readingStage??[]).map(r=>r.start))-Math.min(...(b.memory.stageNarrative?.ranges??b.memory.readingStage??[]).map(r=>r.start))||a.memory.createdAt-b.memory.createdAt:b.score - a.score || b.memory.createdAt - a.memory.createdAt || a.memory.id.localeCompare(b.memory.id));
   const semanticVersions=new Map(permittedWorldMemories(state,book,{source,extra,history:true}).filter(m=>strategyMemoryAllowed(state,m,strategy)).map(m=>[m.id,m])),chatIds=new Set(source==='background'?[]:state.chats.filter(c=>c.bookId===book.id&&chatBelongsToPartner(state,c)&&!c.excluded&&!c.outdatedBy&&!c.replacedBy&&!c.futureGrant&&isEvidenceAllowed(book,c.evidence,extra)).map(c=>c.id));
   const opinionNavigation=!request.entityIds&&!request.relations?scope.opinionNavigation:undefined;
   // Explicitly named complete opinions may share a larger navigation batch;
@@ -133,7 +136,7 @@ export function searchMemories(state: State, book: Book, request: MemoryQuery, e
     if (items.length && chars + size > (requestedOpinionBatch?24000:4000)) break;
     items.push(visibleSemanticMemory(book,visibleWorldMemory(state,book,memory),semanticVersions,{extra,world:!!scope.worldCandidate&&strategy!=='full-original',chatIds})); chars += size; offset++;
   }
-  return { items, total: ranked.length, nextOffset: offset < ranked.length ? offset : undefined,...(candidates.some(m=>m.text===undefined)?{unloadedBodyIds:candidates.filter(m=>m.text===undefined).map(m=>m.id),searchScope:'metadata-and-loaded-bodies' as const}:{}),...(requestedOpinionBatch?{remainingIds:ranked.slice(offset).map(({memory})=>memory.id),unavailableIds:request.ids!.filter(key=>!ranked.some(({memory})=>memory.id===(currentQuestion(state,book,key,extra,versions)?.id??key)))}:{}),...(historicalGranted.length||strategy==='companion'&&items.some(m=>m.historicalOnly||m.replacedBy)?{historicalIds:items.filter(m=>strategy==='companion'&&(m.historicalOnly||m.replacedBy)||historicalGranted.some(h=>h.id===m.id)).map(m=>m.id)}:{}) };
+  return { items, total: ranked.length,...(companionStages?{searchedKinds:['stage','opinion'] as Memory['kind'][],documentScope:'book-and-current-partner' as const}:{}), nextOffset: offset < ranked.length ? offset : undefined,...(candidates.some(m=>m.text===undefined)?{unloadedBodyIds:candidates.filter(m=>m.text===undefined).map(m=>m.id),searchScope:'metadata-and-loaded-bodies' as const}:{}),...(requestedOpinionBatch?{remainingIds:ranked.slice(offset).map(({memory})=>memory.id),unavailableIds:request.ids!.filter(key=>!ranked.some(({memory})=>memory.id===(currentQuestion(state,book,key,extra,versions)?.id??key)))}:{}),...(historicalGranted.length||strategy==='companion'&&items.some(m=>m.historicalOnly||m.replacedBy)?{historicalIds:items.filter(m=>strategy==='companion'&&(m.historicalOnly||m.replacedBy)||historicalGranted.some(h=>h.id===m.id)).map(m=>m.id)}:{}) };
 }
 
 /** Only permitted memories participate in ranking; future material cannot affect even hit counts. */

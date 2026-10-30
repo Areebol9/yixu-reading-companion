@@ -1,3 +1,4 @@
+import {bookVersionAllowsRange} from './book-versions.ts';
 import { covers,id,mergeRanges,normalize } from './books.ts';
 import { evidence,isBackgroundMemory,isCurrentMemory,isEvidenceAllowed,usableMemories ,memoryIsForgotten} from './context.ts';
 import type { Book,Evidence,Memory,Range,State } from './types.ts';
@@ -36,7 +37,7 @@ export function planReadingBrief(state:State,book:Book,text:string|undefined,ref
   if(previous&&(Math.max(...stage.map(r=>r.end))<stageEnd(previous)||previous.text===value))return;
   const linked=previous&&parents.includes(previous.id)&&isCurrentMemory(previous)?previous:undefined;
   const memory:Memory={id:id(),bookId:book.id,partnerId:state.partnerId,kind:'context',text:value,
-    evidence:mergeRanges(refs.filter(r=>r.bookId===book.id&&r.version===book.version)).map(r=>evidence(book,r)),
+    evidence:mergeRanges(refs.filter(r=>r.bookId===book.id&&bookVersionAllowsRange(book,r.version,r))).map(r=>evidence(book,r)),
     parents:[...new Set([...parents,...newIds])],chatIds:[...chatIds],createdAt:Date.now(),forgotten:false,source,
     readingStage:mergeRanges(stage),...(habitIds.length?{habitIds:[...habitIds]}:{}),
     ...(linked?{correctionOf:linked.id,revisionKind:'development',revisionReason:'阅读现场与关注点接续。'}:{})};

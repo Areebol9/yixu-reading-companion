@@ -1,14 +1,18 @@
 import type { FactReviewTask, State } from './types.ts';
 import { bookLength,covers } from './books.ts';
 import { isEvidenceAllowed } from './context.ts';
+import {resolveBookVersion,bookVersionPrefixLength,bookVersionAllowsRange} from './book-versions.ts';
 
 export function pruneReviewSources(state: State): boolean {
   let changed=false;
-  for(const task of state.tasks??[])for(const item of task.items){
-    const book=state.books.find(b=>b.id===task.bookId&&b.version===task.version), memory=state.memories.find(m=>m.id===item.memoryId);
+  for(const task of state.tasks??[]){
+    const book=resolveBookVersion(state.books.find(b=>b.id===task.bookId),task.version);
+    for(const item of task.items){
+    const memory=state.memories.find(m=>m.id===item.memoryId);
     const unavailable=item.status!=='pending'||!['running','interrupted'].includes(task.status)||!book||!memory||memory.forgotten||memory.replacedBy||!isEvidenceAllowed(book,memory.evidence);
     if(item.reviewSources&&(unavailable||!isEvidenceAllowed(book!,item.reviewSources.sources.map(s=>s.evidence))||['stage','state','arc'].includes(memory!.kind)&&item.reviewSources.sources.some(s=>!covers(memory!.evidence,s.evidence)))){delete item.reviewSources;changed=true;}
     if(item.reviewReady&&(unavailable||!isEvidenceAllowed(book!,[...item.reviewReady.sources.map(s=>s.evidence),...item.reviewReady.exposure]))){delete item.reviewReady;if(item.status==='pending')item.reviewReadyInvalidated=true;changed=true;}
+    }
   }
   return changed;
 }
@@ -42,20 +46,20 @@ export function validateReviewTasks(state: State): void {
   const seen = new Set<string>(); let count = 0;
   for (const task of state.tasks) {
     if (!task || typeof task.id !== 'string' || !task.id || seen.has(task.id) || task.kind !== 'fact-review' ||
-      !state.books.some(b => b.id === task.bookId && b.version === task.version) || !state.partners.some(p => p.id === task.partnerId) ||
+      !state.books.some(b=>b.id===task.bookId&&bookVersionPrefixLength(b,task.version)!==undefined) || !state.partners.some(p => p.id === task.partnerId) ||
       !Number.isFinite(task.createdAt) || task.createdAt < 0 || !Number.isFinite(task.updatedAt) || task.updatedAt < task.createdAt ||
       !['running','interrupted','complete','cancelled'].includes(task.status) ||
       task.stopReason !== undefined && !['user','context-changed','error','restart'].includes(task.stopReason) ||
       !Array.isArray(task.items) || !task.items.length || (count += task.items.length) > 100000) throw new Error('核对任务记录无效');
-    seen.add(task.id); const items = new Set<string>();
+    seen.add(task.id); const items = new Set<string>(),book=resolveBookVersion(state.books.find(b=>b.id===task.bookId),task.version)!;
     for (const item of task.items) {
       if (!item || typeof item.memoryId !== 'string' || !item.memoryId || items.has(item.memoryId) || !['pending','reviewed','skipped'].includes(item.status)) throw new Error('核对进度记录无效');
       items.add(item.memoryId);
       const memory = state.memories.find(m => m.id === item.memoryId);
       if(item.reviewReadyInvalidated!==undefined&&item.reviewReadyInvalidated!==true)throw Error('待保存核对失效标记无效');
       if(item.reviewReady){
-        const r=item.reviewReady,book=state.books.find(b=>b.id===task.bookId)!;
-        const validEvidence=(e:any)=>e&&e.bookId===task.bookId&&e.version===task.version&&Number.isSafeInteger(e.start)&&Number.isSafeInteger(e.end)&&e.start>=0&&e.end>e.start&&e.end<=bookLength(book);
+        const r=item.reviewReady;
+        const validEvidence=(e:any)=>e&&e.bookId===task.bookId&&e.version===task.version&&bookVersionAllowsRange(book,e.version,e);
         if(item.status!=='pending'||!['running','interrupted'].includes(task.status)||item.reviewReadyInvalidated||!item.reviewBudget||!/^[0-9a-f]{64}$/.test(r.fingerprint)||!Array.isArray(r.result)||r.result.length!==1||r.result[0]?.originalId!==item.memoryId||typeof r.result[0].before!=='string'||typeof r.result[0].reason!=='string'||!Array.isArray(r.result[0].evidence)||r.result[0].evidence.some(e=>!validEvidence(e))||!Array.isArray(r.sources)||!r.sources.length||r.sources.length>4096||new Set(r.sources.map(s=>s.id)).size!==r.sources.length||r.sources.some(s=>!/^p\d{1,6}$/.test(s.id)||!validEvidence(s.evidence)||s.evidence.end-s.evidence.start>1200)||!Array.isArray(r.exposure)||r.exposure.some(e=>!validEvidence(e)))throw Error('待保存核对的结果或实际原文来源无效');
       }
       if(item.reviewBudget){
@@ -64,7 +68,7 @@ export function validateReviewTasks(state: State): void {
         if(reviewItemAllowance(state,task,item).used>b.limit)throw Error('核对条目超过首次调用预算');
       }
       if(item.reviewSources){
-        const cache=item.reviewSources, book=state.books.find(b=>b.id===task.bookId)!;
+        const cache=item.reviewSources;
         if(item.status!=='pending'||!['running','interrupted'].includes(task.status)||!/^[0-9a-f]{64}$/.test(cache.fingerprint)||!Array.isArray(cache.sources)||!cache.sources.length||cache.sources.length>4096||new Set(cache.sources.map(s=>s.id)).size!==cache.sources.length||cache.sources.some(s=>!/^p\d{1,6}$/.test(s.id)||!s.evidence||s.evidence.bookId!==task.bookId||s.evidence.version!==task.version||!Number.isSafeInteger(s.evidence.start)||!Number.isSafeInteger(s.evidence.end)||s.evidence.start<0||s.evidence.end<=s.evidence.start||s.evidence.end>bookLength(book)||s.evidence.end-s.evidence.start>1200))throw new Error('核对原文接续记录无效');
       }
       if (memory && (memory.bookId !== task.bookId || memory.partnerId !== task.partnerId)) throw new Error('核对任务与记忆不属于同一本书和伙伴');

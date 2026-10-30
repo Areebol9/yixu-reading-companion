@@ -5,7 +5,7 @@ import {captureStorageChanges,prepareStorageChanges,restoreStorageMaterials,vali
 import {hashText} from '../core/text-hash.ts';
 
 const chunkChars=32768;
-const stores=['state','texts','memoryBodies','memoryIndex','entities','head','taskMaterials','textChunks','textMeta','observations'];
+const stores=['state','texts','memoryBodies','memoryIndex','entities','head','taskMaterials','textChunks','textMeta','observations','partnerAvatars'];
 type TextMeta={version:string;length:number;chunkChars:number};
 /** Explicit entity changes and scalar head share one existing IDB transaction.
  * Full save is reserved for import/migration, never used to infer changes. */
@@ -40,6 +40,11 @@ export class IndexedRecordStore implements Store {
   const entries=snapshot.entries;
   for(const entry of entries.sort((a,b)=>a.order-b.order))if((stateCollections as readonly string[]).includes(entry.collection))(state as any)[entry.collection].push(entry.value);
   await restoreStorageMaterials(state,this.readTaskMaterials.bind(this));return state;
+ }
+ async readPartnerAvatar(id:string):Promise<import('../core/types.ts').PartnerAvatarAsset|undefined>{return this.get('partnerAvatars',id);}
+ async writePartnerAvatar(asset:import('../core/types.ts').PartnerAvatarAsset):Promise<void>{
+  const {partnerAvatarAsset}=await import('../core/partner-avatar.ts'),verified=await partnerAvatarAsset(asset.dataUrl);if(verified.id!==asset.id||verified.mimeType!==asset.mimeType)throw Error('头像图片身份不符');
+  await this.queue(async()=>{const prior=await this.readPartnerAvatar(asset.id);if(prior){if(prior.dataUrl!==asset.dataUrl)throw Error('头像资源冲突');return;}const db=await this.database;await new Promise<void>((resolve,reject)=>{const tx=db.transaction('partnerAvatars','readwrite');tx.objectStore('partnerAvatars').put(asset,asset.id);tx.oncomplete=()=>resolve();tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});});
  }
  async readMemoryBodies(refs:readonly MemoryBodyRef[]):Promise<MemoryBody[]>{return this.bodies.read(refs,async missing=>{const found=await Promise.all(missing.map(ref=>this.get<MemoryBody>('memoryBodies',ref.key)));return found.filter((b):b is MemoryBody=>!!b);});}
  async readTaskMaterials(refs:readonly TaskMaterialRef[]):Promise<TaskMaterialBody[]>{for(const ref of refs)validateTaskMaterialRef(ref);const found=await Promise.all(refs.map(ref=>this.get<TaskMaterialBody>('taskMaterials',ref.key)));return found.filter((b):b is TaskMaterialBody=>!!b);}
@@ -113,7 +118,7 @@ export class IndexedRecordStore implements Store {
     const check=(store:string,key:string)=>{const req=tx.objectStore(store).count(key);req.onsuccess=()=>{if(!req.result)abort('局部提交的正文引用未保存');};};
     if(name==='books'){const req=tx.objectStore('textMeta').get(record.version);req.onsuccess=()=>{if(!req.result||req.result.version!==record.version||req.result.length!==record.textLength)abort('局部书籍提交的原文版本或长度尚未保存');};}
     if(name==='memories'){if(!record.bodyRef){abort('阅读正文引用缺失');return;}check('memoryBodies',record.bodyRef.key);}
-    if(record.materialRef)check('taskMaterials',record.materialRef.key);if(record.pendingReceipt?.materialRef)check('taskMaterials',record.pendingReceipt.materialRef.key);if(record.maintenanceDispatch?.materialRef)check('taskMaterials',record.maintenanceDispatch.materialRef.key);
+    if(record.materialRef)check('taskMaterials',record.materialRef.key);for(const key of ['pendingReceipt','maintenanceDispatch','agentResponse'])if(record[key]?.materialRef)check('taskMaterials',record[key].materialRef.key);
    }
   });
  }
@@ -121,4 +126,4 @@ export class IndexedRecordStore implements Store {
  saveObservations(value:unknown):Promise<void>{const copy=structuredClone(value);return this.queue(()=>this.putSingle('observations','current',copy));}
  async close():Promise<void>{await this.writing.catch(()=>{});(await this.database).close();}
 }
-export class LocalStore extends IndexedRecordStore {constructor(){super('yixu-reading',5);}}
+export class LocalStore extends IndexedRecordStore {constructor(){super('yixu-reading',6);}}

@@ -1,3 +1,4 @@
+import {bookVersionAllowsRange} from './book-versions.ts';
 import { mergeRanges } from './books.ts';
 import { isEvidenceAllowed } from './context.ts';
 import { chatBelongsToPartner } from './discussion-recall.ts';
@@ -24,7 +25,7 @@ export function canRetryQuestion(state: State, chat: Chat | undefined): chat is 
   if (!chat || chat.role !== 'user' || chat.excluded || chat.outdatedBy || chat.replacedBy || chat.futureGrant ||
     !['failed', 'stopped'].includes(chat.delivery ?? '') || !chatBelongsToPartner(state, chat) || !chat.evidence.length) return false;
   const book = state.books.find(b => b.id === chat.bookId);
-  return !!book && chat.evidence.every(e => e.bookId === book.id && e.version === book.version) && isEvidenceAllowed(book, chat.evidence) &&
+  return !!book && chat.evidence.every(e => e.bookId === book.id && bookVersionAllowsRange(book,e.version,e)) && isEvidenceAllowed(book, chat.evidence) &&
     state.conversations.some(c => c.id === chat.sessionId && c.bookId === chat.bookId) &&
     !state.chats.some(c => c.role === 'assistant' && c.replyTo === chat.id && c.sessionId === chat.sessionId && c.bookId === chat.bookId &&
       !c.excluded && !c.outdatedBy && !c.replacedBy && chatBelongsToPartner(state, c));

@@ -1,6 +1,7 @@
 import type { Chapter } from '../core/types.ts';
 import { covers } from '../core/books.ts';
 import { readingCoverage } from '../core/reading-progress.ts';
+import { originalParagraphs } from '../core/original-paragraphs.ts';
 
 export const isVolumeHeading = (title: string) => /^第[零〇一二三四五六七八九十百千万两\d]+[卷部集](?:\s|[：:]|$)/u.test(title);
 
@@ -8,10 +9,8 @@ export const isVolumeHeading = (title: string) => /^第[零〇一二三四五六
 export function readingParagraphs(text: string, start: number, title: string) {
   const lines: { start: number; end: number; text: string; heading: boolean }[] = [];
   let first = true;
-  for (const match of text.matchAll(/[^\n]+/gu)) {
-    if (!match[0].trim()) continue;
-    const offset = start + match.index!;
-    lines.push({ start: offset, end: offset + match[0].length, text: match[0], heading: first && match[0].trim() === title });
+  for (const paragraph of originalParagraphs(text,start)) {
+    lines.push({ ...paragraph, heading: first && paragraph.text.trim() === title });
     first = false;
   }
   return lines;
@@ -32,7 +31,7 @@ export function chapterBodyCoverage(text: string, start: number, title: string, 
 export function chapterReadingRange(chapters: readonly Chapter[], boundary: number, position: number, original: string|number, pureVolumeHeadings:ReadonlySet<number>=new Set()) {
   const length = typeof original==='string'?original.length:original;
   let target = Math.max(boundary, Math.min(position, Math.max(boundary, length - 1)));
-  const readable = chapters.filter(item => item.end > boundary && !pureVolumeHeadings.has(item.index) && !(typeof original==='string'&&isVolumeHeading(item.title)&&original.slice(item.start,item.end).trim()===item.title));
+  const readable = chapters.filter(item => item.end > boundary && !(['part','volume'].includes(item.kind??'')&&item.contentStart!==undefined&&item.contentEnd!==undefined&&item.contentStart>=item.contentEnd) && !pureVolumeHeadings.has(item.index) && !(typeof original==='string'&&isVolumeHeading(item.title)&&original.slice(item.start,item.end).trim()===item.title));
   const chapter = readable.find(item => item.start <= target && item.end > target) ?? readable.find(item => item.start >= target) ?? readable.at(-1);
   if (!chapter) return;
   target = Math.max(Math.max(boundary, chapter.start), Math.min(target, chapter.end - 1));

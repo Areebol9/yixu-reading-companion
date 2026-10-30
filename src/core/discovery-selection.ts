@@ -18,15 +18,15 @@ function limits(options:MemoryCandidateSelectionOptions):{chars:number;count:num
 /** Stable lane interleaving. A real old/current pair uses at most two slots per turn. */
 export function selectMemoryDocumentCandidates(branches:MemoryCandidateDocuments,options:MemoryCandidateSelectionOptions={}):{ids:string[];selections:MemoryCandidateSelection[];remainingIds:string[]} {
   const budget=limits(options),all=[...(branches.current??[]),...(branches.focused??[]),...(branches.coverage??[]),...(branches.companions??[])];
-  const byId=new Map(all.map(item=>[item.id,item])),selected=new Set<string>(),seenHashes=new Set<string>(),remaining=new Set<string>(),selections:MemoryCandidateSelection[]=[];
+  const byId=new Map(all.map(item=>[item.id,item])),selected=new Set<string>(),remaining=new Set<string>(),selections:MemoryCandidateSelection[]=[];
   let chars=0;
   const lanes:([MemoryCandidateLane,readonly MemoryDocumentIndex[]])[]=[['current',branches.current??[]],['focused',branches.focused??[]],['coverage',branches.coverage??[]]];
   const positions=new Map<MemoryCandidateLane,number>();
   const add=(item:MemoryDocumentIndex,lane:MemoryCandidateLane)=>{
-    if(selected.has(item.id)||seenHashes.has(item.bodyHash))return;
+    if(selected.has(item.id))return;
     if(!Number.isSafeInteger(item.bodyChars)||item.bodyChars<0)throw Error('阅读档案正文长度无效');
     if(selections.length>=budget.count||chars+item.bodyChars>budget.chars){remaining.add(item.id);return;}
-    chars+=item.bodyChars;selected.add(item.id);seenHashes.add(item.bodyHash);remaining.delete(item.id);selections.push({id:item.id,lane});
+    chars+=item.bodyChars;selected.add(item.id);remaining.delete(item.id);selections.push({id:item.id,lane});
   };
   const group=(item:MemoryDocumentIndex,lane:MemoryCandidateLane)=>{
     const latest=[...(item.developmentChainIds??[])].reverse().map(id=>byId.get(id)).find((candidate):candidate is MemoryDocumentIndex=>!!candidate);

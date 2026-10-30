@@ -25,15 +25,14 @@ export type OriginalReadBatch = {
 /** Read independent exact spans. A span crossing an unread gap is rejected;
  * callers must name the permitted spans separately rather than join the gap. */
 export function readOriginalBatch(book: Book, ranges: Range[], extra: Range[] = []): OriginalReadBatch {
-  if (!Array.isArray(ranges) || ranges.length < 1 || ranges.length > 4) throw Error('批量原文读取须包含 1 至 4 段');
+  if (!Array.isArray(ranges) || ranges.length < 1 ) throw Error('批量原文读取须包含 至少1段');
   let totalChars = 0;
   const parsed = ranges.map(range => {
     if (!range || typeof range !== 'object' || Array.isArray(range) || Object.keys(range).some(k => !['start', 'end'].includes(k)) ||
-      !Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end) || range.start < 0 || range.end <= range.start || range.end - range.start > 6000) throw Error('每段原文须使用有效坐标且不超过 6000 字符');
+      !Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end) || range.start < 0 || range.end <= range.start) throw Error('每段原文须使用有效坐标');
     totalChars += range.end - range.start;
     return { start: range.start, end: range.end };
   });
-  if (totalChars > 16000) throw Error('批量原文总长度不得超过 16000 字符');
   const items = parsed.map((range, requestIndex) => ({ requestIndex, range, text: readText(book, range, extra), evidence: evidence(book, range) }));
   return { items, totalChars, notice: '各段保留独立原文坐标和原字句；段间未读取的文字不作连续原文或事件结论。' };
 }
