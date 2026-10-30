@@ -81,13 +81,19 @@ export function readingDocumentsToolFor(options:{partnerMaintenance?:boolean}={}
   if(!options.partnerMaintenance)return readingDocumentsTool;
   return{...readingDocumentsTool,description:readingDocumentsTool.description+' '+partnerMaintenancePolicy,parameters:{...readingDocumentsTool.parameters,properties:{...(readingDocumentsTool.parameters.properties as Record<string,unknown>),partnerMaintenance:partnerMaintenanceSchema}},validate:args=>validateReadingDocumentsPayloadShape(args,options)};
 }
+/** Diagnose the actual submitted type without decoding or rewriting model data. */
+export function readingDocumentsArrayError(value:unknown):string|undefined{
+  if(Array.isArray(value))return;
+  const actual=value===undefined?'missing':value===null?'null':typeof value;
+  return `finish_reading.documents须为JSON数组（array），实际类型为${actual}；直接提交documents:[{operation:"create",text:"完整正文",organization:{subject:null}}]，无新增或修改时提交documents:[]。${typeof value==='string'?'当前字符串中的JSON不会自动解码；请保留文档内容，只修正字段类型。':''}`;
+}
 export function readingDocumentsShape(args:unknown,diagnostics?:string[],options:{partnerMaintenance?:boolean}={}):ReadingReply{
   if(!args||typeof args!=='object'||Array.isArray(args))throw Error('阅读文档出口须包含明确documents，原答保持');
   const {readingStage:_readingStage,...value}=args as Record<string,unknown>;
   const unexpected=Object.keys(value).filter(k=>!['documents','reinforce','working','understanding','focus','paragraphComments','reaction','views',...(options.partnerMaintenance?['partnerMaintenance']:[])].includes(k));
   const errors:string[]=[];
   if(unexpected.length)errors.push(Object.hasOwn(value,'sourceIds')?'finish_reading.sourceIds不能位于顶层；请放入documents[i].sourceIds或documents[i].edits[j].sourceIds，原答保持':`finish_reading顶层字段不允许：${unexpected.join('、')}；每份概要用views[i].decision表达保留或修改，不另填审阅确认字段；原答保持`);
-  if(!Array.isArray(value.documents))errors.push('阅读文档集合无效，原答保持');
+  const documentsError=readingDocumentsArrayError(value.documents);if(documentsError)errors.push(documentsError);
   let paragraphComments,reaction;
   try{paragraphComments=parseParagraphComments(value.paragraphComments);reaction=parseReadingExpression(value.reaction,paragraphComments);}catch(error){errors.push((error as Error).message);}
   const thoughts=(Array.isArray(value.documents)?value.documents:[]).flatMap((rawDocument,index)=>{try{

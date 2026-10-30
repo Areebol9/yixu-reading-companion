@@ -36,7 +36,9 @@ Books, conversations, reading permissions, saved responses, and usage records ar
 
 The default data root is `%LOCALAPPDATA%\YixuReading\Desktop`; the app remembers its selected location. **File → Open data folder** shows the actual folder. Set `YIXU_DATA_DIR` before startup to select a separate data root. Keep your data folder when replacing program files.
 
-**Book details** shows the full locations of the original TXT and the book project, with buttons to open their folders. You can also choose and migrate book project folders for agents. Reading uses a versioned copy in the app's library; the original TXT stays in its location. Use **Update text** to import additions. Book analysis is shared within the book project; private companion memories keep their owner. Use the normal backup/export and import functions to transfer reading archives. Unconfirmed requests keep their original records and recovery actions rather than being blindly resent.
+**Book details** shows the original TXT location. **Open book project** opens an existing project folder and saves directly in that folder. Selecting another project leaves the previous folder in place. **Return to local library** opens your original local reading records.
+
+**Save project copy** creates a folder named after the selected book at the location you choose. It includes the book text, saved reading position, understanding, personas, and actual conversations. The copy can be opened by another client. API keys, service configuration, billing records, native execution logs, and unfinished requests remain with the original client. The copy includes conversations; choose its recipients accordingly. The original TXT stays in place. Use **Update text** to import additions.
 
 ## Window and background operation
 

@@ -1,5 +1,6 @@
 /** English interface copy. Keys are the original Chinese UI wording. */
 export const uiEnglish:Record<string,string> = {
+  "保存在当前书籍工程": "Saved in the current book project",
   "正在补读前文": "Catching up on earlier reading",
   "选择表情": "Choose an emoji",
   "关闭表情选择": "Close emoji picker",

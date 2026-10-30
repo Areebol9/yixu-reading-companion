@@ -270,13 +270,11 @@ export class WorkbenchController implements WorkbenchClient {
   if(!this.environment.getBookProjectLocations)throw Error('请在桌面客户端管理书籍工程位置');
   return this.environment.getBookProjectLocations(this.session.id);
  }
- async setBookProjectRootDirectory(directory:string){
-  if(!this.environment.setBookProjectRootDirectory)throw Error('请在桌面客户端管理书籍工程位置');
-  await this.action('迁移书籍工程',async()=>{
-   if(this.following)throw Error('请先暂停伴读，等待当前回复保存后再移动书籍文件');
-   await this.environment.setBookProjectRootDirectory!(this.session.id,directory);
-  });
-  return this.getBookProjectLocations();
+ async saveBookProjectCopy(bookId:string,parentDirectory:string){
+  if(!this.environment.saveBookProjectCopy)throw Error('请在桌面客户端保存书籍工程');
+  this.engine.book(bookId);
+  await this.flush();
+  return this.environment.saveBookProjectCopy(this.session.id,bookId,parentDirectory);
  }
  async saveDraft(key:string,value:WorkbenchDraft|null){
   if(this.disposed||this.session.archivedAt)throw Error('当前存档不能更改草稿');validateWorkbenchDraft(this.engine.state,key,value);

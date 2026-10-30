@@ -36,7 +36,7 @@ export interface WorkbenchEnvironment {
   projectDirectory?(archiveId: string, bookId: string): Promise<string>;
   sessionDirectory?(archiveId:string,bookId:string):Promise<string>;
   getBookProjectLocations?(archiveId:string):Promise<import('../host/contract.ts').BookProjectLocations>;
-  setBookProjectRootDirectory?(archiveId:string,directory:string):Promise<import('../host/contract.ts').BookProjectLocations>;
+  saveBookProjectCopy?(archiveId:string,bookId:string,parentDirectory:string):Promise<{directory:string;title:string}>;
   attachAgentSession?(archiveId: string, bookId: string, sessionId: string): Promise<void>;
   prepareExport?(input:{archiveId:string;kind:'backup'|'record';name:string;exportId?:string;metadata?:Record<string,unknown>;onProgress?:(stage:string)=>void}):Promise<WorkbenchExportFile>;
 }

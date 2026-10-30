@@ -137,6 +137,11 @@ export async function startClientAgentControl({dataRoot,coordinator,pageOrigin,n
     if(!input.settings||typeof input.settings!=='object'||Array.isArray(input.settings))throw new AgentControlError('自动阅读需要明确settings对象',400);
     value=await nativeControl('start-auto-reading',input.settings);
    }
+   else if(input.action==='open-project'){
+    if(typeof input.directory!=='string'||!input.directory)throw new AgentControlError('请选择要打开的书籍工程目录',400);
+    value=await nativeControl('open-project',{directory:input.directory});
+   }
+   else if(input.action==='local-library')value=await nativeControl('local-library');
    else if(['open','hide','quit'].includes(input.action))value=await nativeControl(input.action);
    else throw new AgentControlError('未知本机agent操作',400);
    json(response,200,value);

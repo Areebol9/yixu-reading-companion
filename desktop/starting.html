@@ -6,8 +6,8 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" type="image/svg+xml" href="assets/app-icon.svg">
 <title>宜序伴读</title>
-<style>body{margin:0;font:16px system-ui;background:#f7f4ed;color:#443c32;display:grid;place-content:center;min-height:100vh;text-align:center}img{width:80px;height:80px;margin:0 auto 12px}h1{font-size:28px;font-weight:600;margin:12px 0}p{color:#75695d;margin:6px 24px;line-height:1.6}</style>
+<style>body{margin:0;font:16px system-ui;background:#f7f4ed;color:#443c32;display:grid;place-content:center;min-height:100vh;text-align:center}img{width:80px;height:80px;margin:0 auto 12px}h1{font-size:28px;font-weight:600;margin:12px 0}p{color:#75695d;margin:6px 24px;line-height:1.6;max-width:620px}button{font:inherit;color:inherit;border:1px solid #c7bbab;border-radius:8px;background:#fffdf8;padding:10px 16px;margin:14px 5px;cursor:pointer}button:disabled{opacity:.55;cursor:wait}</style>
 <script src="starting.js" defer></script>
 </head>
-<body><img src="assets/app-icon.svg" alt=""><h1 id="app-name">宜序伴读</h1><p id="startup-message">正在连接本地阅读存档…</p></body>
+<body><img src="assets/app-icon.svg" alt=""><h1 id="app-name">宜序伴读</h1><p id="startup-message" role="status">正在连接本地阅读存档…</p><div id="project-actions" hidden><button type="button" id="open-project">打开书籍工程</button><button type="button" id="local-library">返回本机书架</button></div></body>
 </html>

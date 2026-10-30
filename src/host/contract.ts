@@ -5,10 +5,9 @@ export type BookProject = {
   schema: 'yixu-book-project-v1'; id: string; archiveId: string; bookId: string;
   title: string; contentVersion: string; directory: string; executionDirectory: string; workspaceId: string;
 };
-export type BookProjectLocations = {rootDirectory: string; projects: BookProject[]};
+export type BookProjectLocations = {rootDirectory: string; projects: BookProject[];openedProjectDirectory?:string};
 export interface ProjectRegistry {
   getLocations(): Promise<BookProjectLocations>;
-  setRootDirectory(directory: string): Promise<BookProjectLocations>;
   ensurePartner(partner:{id:string;name:string}):Promise<void>;
   ensure(book: {id: string; title: string; version: string}): Promise<BookProject>;
   list(): Promise<BookProject[]>;

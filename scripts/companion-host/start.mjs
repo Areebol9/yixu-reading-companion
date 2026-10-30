@@ -64,8 +64,15 @@ export async function startCompanionHost(args = process.argv.slice(2)) {
   // Never accept the normal shared home by accidental environment inheritance.
   const inside=(parent,path)=>{const child=relative(parent,path);return !!child&&!child.startsWith('..')&&!isAbsolute(child);};
   const desktopRoot=process.env.YIXU_DESKTOP==='1'&&process.env.YIXU_CLIENT_DATA_ROOT?resolve(process.env.YIXU_CLIENT_DATA_ROOT):undefined;
-  if (!inside(join(workspaceRoot,'.local'),home)&&!(desktopRoot&&inside(desktopRoot,dataRoot)&&inside(desktopRoot,home))) throw Error('专用宿主home须在本项目.local或明确客户端数据目录内，不能采用共享DSH_HOME');
+  const projectRoot=process.env.YIXU_DESKTOP==='1'&&process.env.YIXU_OPENED_PROJECT_DIRECTORY?resolve(process.env.YIXU_OPENED_PROJECT_DIRECTORY):undefined;
+  const projectLocation=projectRoot&&resolve(projectRoot,'data')===dataRoot&&resolve(projectRoot,'runtime')===home;
+  if(projectLocation){const {readReadingProject}=await import('../../src/host/reading-project.ts');const project=await readReadingProject(projectRoot);if(project.archiveId!==options['--archive'])throw Error('所选工程身份与启动请求不一致');}
+  if (!projectLocation&&!inside(join(workspaceRoot,'.local'),home)&&!(desktopRoot&&inside(desktopRoot,dataRoot)&&inside(desktopRoot,home))) throw Error('请使用本机阅读存档或明确选择的书籍工程');
   const nativeBinding=await bindNativeHome(dataRoot,home);
+  // A received project is data, never a source of executable DSH profiles.
+  // Keep the loader/profile registry in this client's private configuration;
+  // only native session records live with the explicitly opened project.
+  const profileHome=projectLocation?join(desktopRoot,'project-runtime-config',options['--archive']):nativeBinding.nativeHome;
   const packageFile = options['--dsh-package'] ? join(resolve(options['--dsh-package']), 'package.json') : require.resolve('@deepseek-ai/dsh/package.json');
   const manifest = JSON.parse(await readFile(packageFile, 'utf8'));
   if (manifest.name !== '@deepseek-ai/dsh' || manifest.version !== version) throw Error('伴读宿主要求官方DSH ' + version);
@@ -75,7 +82,7 @@ export async function startCompanionHost(args = process.argv.slice(2)) {
   const port = Number(options['--port'] ?? 0);
   if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw Error('宿主端口无效');
   for (const origin of options.origins ?? []) { const url = new URL(origin); if (!['127.0.0.1', 'localhost'].includes(url.hostname) || url.origin !== origin) throw Error('仅允许明确的本机页面Origin'); }
-  const profile = join(home, 'profiles', 'companion');
+  const profile = join(profileHome, 'profiles', 'companion');
   await mkdir(join(profile, 'node_modules', '@yixu'), {recursive: true});
   await exactTemplate(join(workspaceRoot, 'dsh/profile/package.json'), join(profile, 'package.json'));
   await exactTemplate(join(workspaceRoot, 'dsh/profile/cordis.patch.yml'), join(profile, 'cordis.patch.yml'));
@@ -87,7 +94,9 @@ export async function startCompanionHost(args = process.argv.slice(2)) {
   await mkdir(diagnostics, {recursive: true, mode: 0o700});
   const child = spawn(process.execPath, ['--report-on-fatalerror', '--report-exclude-env', '--report-directory='+diagnostics, '--experimental-transform-types', bin, '--profile', 'companion'], {
     cwd: workspaceRoot, stdio: 'inherit', windowsHide: true,
-    env: {...process.env, DSH_HOME: nativeBinding.nativeHome, DSH_TELEMETRY_DISABLED: '1',
+    env: {...process.env, DSH_HOME: profileHome, DSH_TELEMETRY_DISABLED: '1',
+      YIXU_COMPANION_NATIVE_HOME:nativeBinding.nativeHome,
+      YIXU_COMPANION_SESSION_ROOT:join(nativeBinding.nativeHome,'archives',options['--archive'],'sessions'),
       YIXU_COMPANION_DATA_ROOT: dataRoot, YIXU_COMPANION_ARCHIVE_ID: options['--archive'],
       YIXU_COMPANION_DOMAIN_MODULE: domainModule, YIXU_COMPANION_HOST_PORT: String(port),
       YIXU_COMPANION_ORIGINS: JSON.stringify(options.origins ?? [])},

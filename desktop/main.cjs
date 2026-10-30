@@ -6,6 +6,7 @@ const path = require('node:path');
 const {randomUUID} = require('node:crypto');
 const {pathToFileURL} = require('node:url');
 const {clientPaths} = require('./runtime.cjs');
+const {readReadingProject, selectedReadingProject, saveReadingProjectSelection, readingProjectEnvironment} = require('./project-location.cjs');
 app.setName('宜序伴读');
 app.setAppUserModelId('org.yixu.reading-companion');
 let language = 'zh-CN', languageSelected = false;
@@ -13,6 +14,13 @@ const normalizeLanguage = value => typeof value === 'string' && /^en(?:-|$)/i.te
 const t = (zh, en) => language === 'en' ? en : zh;
 const appTitle = () => t('宜序伴读', 'Yixu Reading Companion');
 const initiallyHeadless = (process.argv.includes('--headless') || process.argv.includes('--yixu-headless')) && !process.argv.includes('--show');
+function projectIntentFromArgs(argv) {
+  const directory = argv.find(value => value.startsWith('--yixu-open-project='));
+  const request = argv.find(value => value.startsWith('--yixu-project-request='));
+  const requestId = request?.slice('--yixu-project-request='.length);
+  return directory ? {action: 'open-project', directory: directory.slice('--yixu-open-project='.length), requestId} : argv.includes('--yixu-local-library') ? {action: 'local-library', requestId} : null;
+}
+const launchProjectIntent = projectIntentFromArgs(process.argv);
 // This is an app mode; Chromium's native --headless would prevent later GUI display.
 app.commandLine.removeSwitch('headless');
 const root = path.resolve(__dirname, '..');
@@ -21,7 +29,7 @@ const root = path.resolve(__dirname, '..');
 const instanceProfile = path.join(app.getPath('home'), '.yixu-reading', 'desktop-instance');
 mkdirSync(instanceProfile, {recursive: true});
 app.setPath('userData', instanceProfile);
-const primary = app.requestSingleInstanceLock({show: !initiallyHeadless});
+const primary = app.requestSingleInstanceLock({show: !initiallyHeadless, project: launchProjectIntent});
 let config;
 if (!primary) app.quit();
 else {
@@ -36,15 +44,17 @@ else {
 function run() {
   const developerMode = process.argv.includes('--developer');
   let openRequested = !initiallyHeadless, readerReady = false;
-  let window, child, childExit, tray, readyURL, startupFailed = false, quitting = false, allowQuit = false, closing = false, statusTimer;
+  let window, child, childExit, tray, readyURL, startupFailed = false, quitting = false, allowQuit = false, closing = false, statusTimer, switching = false, readingProject;
+  let startupStatus = {phase: 'starting', message: ''};
+  let startupFinished = false, deferredProjectIntent, projectRequest = {};
   const requests = new Map(), autoRequests = new Map();
-  function state() { return {visible: !!window && !window.isDestroyed() && window.isVisible() && !window.isMinimized(), focused: !!window && !window.isDestroyed() && window.isFocused(), minimized: !!window && !window.isDestroyed() && window.isMinimized(), headless: !openRequested, trayAvailable: !!tray && !tray.isDestroyed(), readerReady, developerMode}; }
+  function state() { return {visible: !!window && !window.isDestroyed() && window.isVisible() && !window.isMinimized(), focused: !!window && !window.isDestroyed() && window.isFocused(), minimized: !!window && !window.isDestroyed() && window.isMinimized(), headless: !openRequested, trayAvailable: !!tray && !tray.isDestroyed(), readerReady, developerMode, readingProjectOpen: !!readingProject, switching, startupFailed, projectSelectionRequestId: projectRequest.id, projectSelectionError: projectRequest.error}; }
   function publish() { if (window && !window.isDestroyed()) window.webContents.send('yixu:window-state-changed', state()); }
   function showWindow() { openRequested = true; if (!window || window.isDestroyed()) return; if (window.isMinimized()) window.restore(); window.show(); window.focus(); cancelBackgroundExit(); publish(); }
   function cancelBackgroundExit() { if (statusTimer) clearInterval(statusTimer); statusTimer = undefined; }
   function destroyTray() { if (tray) { tray.destroy(); tray = undefined; } cancelBackgroundExit(); }
   function updateMenus() {
-    const items = [{label: t('文件', 'File'), submenu: [{label: t('打开数据目录', 'Open Data Folder'), click: () => shell.openPath(config.dataRoot)}, {type: 'separator'}, {label: t('暂停后台处理', 'Pause Background Work'), click: pauseBackground}, {label: t('保存并退出', 'Save and Quit'), click: () => exitGracefully()}]}, {label: t('视图', 'View'), submenu: [{role: 'reload', label: t('刷新', 'Reload')}, {role: 'resetZoom', label: t('实际大小', 'Actual Size')}, {role: 'zoomIn', label: t('放大', 'Zoom In')}, {role: 'zoomOut', label: t('缩小', 'Zoom Out')}, {role: 'togglefullscreen', label: t('全屏', 'Full Screen')}, ...(developerMode ? [{role: 'toggleDevTools', label: t('开发者工具', 'Developer Tools')}] : [])]}];
+    const items = [{label: t('文件', 'File'), submenu: [{label: t('打开书籍工程', 'Open Book Project'), enabled: !switching && !quitting, click: () => void chooseAndOpenReadingProject()}, {label: t('返回本机书架', 'Return to Local Library'), enabled: !switching && !quitting, click: () => { try { acceptReadingProject(null); } catch (error) { failed(error); } }}, {type: 'separator'}, {label: t('打开数据目录', 'Open Data Folder'), click: () => shell.openPath(config.dataRoot)}, {type: 'separator'}, {label: t('暂停后台处理', 'Pause Background Work'), enabled: !switching, click: pauseBackground}, {label: t('保存并退出', 'Save and Quit'), enabled: !switching, click: () => exitGracefully()}]}, {label: t('视图', 'View'), submenu: [{role: 'reload', label: t('刷新', 'Reload')}, {role: 'resetZoom', label: t('实际大小', 'Actual Size')}, {role: 'zoomIn', label: t('放大', 'Zoom In')}, {role: 'zoomOut', label: t('缩小', 'Zoom Out')}, {role: 'togglefullscreen', label: t('全屏', 'Full Screen')}, ...(developerMode ? [{role: 'toggleDevTools', label: t('开发者工具', 'Developer Tools')}] : [])]}];
     Menu.setApplicationMenu(Menu.buildFromTemplate(items));
     if (tray) { tray.setToolTip(appTitle()); tray.setContextMenu(Menu.buildFromTemplate([{label: t('打开宜序伴读', 'Open Yixu Reading Companion'), click: showWindow}, {label: t('保存并退出', 'Save and Quit'), click: () => exitGracefully()}])); }
   }
@@ -62,10 +72,14 @@ function run() {
       try { if (!busy(await rpc('status'))) await exitGracefully(false); } catch { /* Keep a reachable tray when saving failed. */ }
     }, 2500);
   }
-  function handleNativeControl(message) {
-    if (typeof message.id !== 'string' || !child?.connected) return;
-    const respond = value => child.send({type: 'native-response', id: message.id, value});
+  function handleNativeControl(message, sender) {
+    if (typeof message.id !== 'string' || !sender.connected) return;
+    const respond = value => sender.send({type: 'native-response', id: message.id, value});
     if (message.action === 'status') return respond({...state(), quitting});
+    if (message.action === 'open-project' || message.action === 'local-library') {
+      try { return respond(acceptReadingProject(message.action === 'local-library' ? null : message.data?.directory)); }
+      catch (error) { return sender.send({type: 'native-response', id: message.id, error: error.message}); }
+    }
     if (message.action === 'open') {
       showWindow();
       const deadline = Date.now() + 3000;
@@ -99,6 +113,7 @@ function run() {
       return respond({...state(), accepted: true});
     }
     if (message.action === 'quit') {
+      if (switching) return sender.send({type: 'native-response', id: message.id, error: t('正在打开工程，请等待完成后再退出。', 'A project is opening. Wait for it to finish before quitting.')});
       respond({accepted: true, quitting: true});
       setImmediate(() => void exitGracefully(false));
       return;
@@ -110,7 +125,7 @@ function run() {
     return new Promise((resolve, reject) => {
       const id = randomUUID();
       const timer = action === 'shutdown' ? undefined : setTimeout(() => { requests.delete(id); reject(Error(t('后台状态暂时未返回，请稍后重试。', 'The background service has not returned its status. Please try again shortly.'))); }, 15000);
-      requests.set(id, {resolve, reject, timer}); child.send({type: 'control', id, action});
+      requests.set(id, {resolve, reject, timer, child}); child.send({type: 'control', id, action});
     });
   }
   function busy(value) {
@@ -121,14 +136,14 @@ function run() {
     });
   }
   async function exitGracefully(foreground = true) {
-    if (quitting) return;
+    if (quitting || switching) return;
     quitting = true;
     if (foreground) showWindow();
     window?.setTitle(startupFailed ? t('正在退出 · 宜序伴读', 'Quitting · Yixu Reading Companion') : t('正在等待回复并保存，请稍候 · 宜序伴读', 'Waiting for Replies and Saving · Yixu Reading Companion')); window?.setProgressBar(2);
     window?.webContents.send('yixu:lifecycle-status', {phase: 'saving', message: t('正在等待已发出的回复并保存，完成后自动退出。', 'Waiting for pending replies and saving. The app will quit when finished.')});
     try {
-      await rpc('shutdown');
-      const ended = await childExit; if (ended.code !== 0) throw Error(t('后台服务未正常退出，原存档已保留。', 'The background service did not exit normally. Your saved reading data is retained.'));
+      if (child?.connected) await rpc('shutdown');
+      const ended = childExit ? await childExit : {code: 0}; if (ended.code !== 0 && !startupFailed) throw Error(t('后台服务未正常退出，原存档已保留。', 'The background service did not exit normally. Your saved reading data is retained.'));
       window?.webContents.session.flushStorageData();
       destroyTray(); allowQuit = true; app.quit();
     } catch (error) {
@@ -139,7 +154,7 @@ function run() {
     }
   }
   async function pauseBackground(item) {
-    if (quitting) return;
+    if (quitting || switching) return;
     item.enabled = false;
     try {
       await rpc('pause');
@@ -151,7 +166,7 @@ function run() {
     } finally { item.enabled = true; }
   }
   async function requestClose() {
-    if (quitting || closing) return;
+    if (quitting || closing || switching) return;
     closing = true;
     try {
       if (!child || child.exitCode !== null) { quitting = true; allowQuit = true; app.quit(); return; }
@@ -165,7 +180,111 @@ function run() {
       else if (response === 1) await exitGracefully();
     } catch (error) { closing = false; showWindow(); await dialog.showMessageBox(window, {type: 'error', title: t('暂时无法确认后台状态', 'Background Status Is Unavailable'), message: error.message, buttons: [t('返回客户端', 'Return to App')]}); }
   }
-  app.on('second-instance', (_event, _argv, _cwd, intent) => { if (intent?.show === true) showWindow(); });
+  function setStartupStatus(phase, message) {
+    startupStatus = {phase, message};
+    window?.webContents.send('yixu:lifecycle-status', startupStatus);
+  }
+  function projectChoiceError() {
+    return Error(t('书籍工程暂时无法打开。请选择包含 project.json 和已保存阅读资料的完整工程目录。', 'The book project could not be opened. Choose a complete project folder containing project.json and saved reading data.'));
+  }
+  async function chooseReadingProjectDirectory(current) {
+    const selected = await dialog.showOpenDialog(window, {title: t('打开书籍工程', 'Open Book Project'), ...(typeof current === 'string' && path.isAbsolute(current) ? {defaultPath: current} : {}), properties: ['openDirectory'], buttonLabel: t('打开工程', 'Open Project')});
+    return selected.canceled ? null : selected.filePaths[0] ?? null;
+  }
+  async function chooseAndOpenReadingProject() {
+    try { const selected = await chooseReadingProjectDirectory(readingProject?.directory); if (selected) acceptReadingProject(selected); }
+    catch { await dialog.showMessageBox(window, {type: 'error', title: t('工程暂时无法打开', 'Project Could Not Open'), message: projectChoiceError().message, buttons: [t('返回客户端', 'Return to App')]}); }
+  }
+  function acceptReadingProject(directory, requestId) {
+    if (quitting || switching || autoRequests.size) throw Error(t('正在保存、打开工程或启动阅读，请等待当前操作完成。', 'Saving, opening a project, or starting reading is in progress. Wait for it to finish.'));
+    let project;
+    try { project = directory === null ? null : readReadingProject(directory); }
+    catch { throw projectChoiceError(); }
+    projectRequest = {id: requestId};
+    if (!project && !readingProject && !startupFailed && !existsSync(path.join(config.dataRoot, 'project-selection.json'))) return {accepted: true, localLibrary: true};
+    switching = true; cancelBackgroundExit(); updateMenus(); publish();
+    // The acknowledgement is queued before shutdown. Graceful server close also
+    // waits for the accepted agent HTTP response to finish.
+    setImmediate(() => void switchReadingProject(project));
+    return {accepted: true, switching: true};
+  }
+  async function switchReadingProject(project) {
+    let stopped = false;
+    setStartupStatus('saving', t('正在保存当前阅读记录并打开工程…', 'Saving current reading records and opening the project…'));
+    window?.setProgressBar(2);
+    try {
+      if (child?.connected) await rpc('shutdown');
+      if (childExit) {
+        const ended = await childExit;
+        if (ended.code !== 0 && !startupFailed) throw Error('HOST_NOT_SAVED');
+      }
+      stopped = true; child = undefined; childExit = undefined; readyURL = undefined; readerReady = false;
+      saveReadingProjectSelection(config.dataRoot, project);
+      readingProject = project;
+      setStartupStatus('starting', project ? t('正在打开书籍工程…', 'Opening the book project…') : t('正在打开本机书架…', 'Opening the local library…'));
+      await window.loadFile(path.join(__dirname, 'starting.html'));
+      await startServer(project);
+      window?.setProgressBar(-1); window?.setTitle(appTitle());
+    } catch (error) {
+      projectRequest.error = t('工程尚未完成打开，原阅读记录保持。请核对客户端状态后再操作。', 'The project has not finished opening. Existing reading records are retained. Check the client status before proceeding.');
+      if (!stopped && child?.connected && readyURL) {
+        window?.setProgressBar(-1);
+        setStartupStatus('error', t('当前阅读记录尚未完成保存，请稍后再次打开工程。原目录选择保持。', 'Current reading records have not finished saving. Try opening the project again later. The previous selection is retained.'));
+      } else failed(error);
+    } finally { switching = false; updateMenus(); publish(); }
+  }
+  function failed() {
+    startupFailed = true; readyURL = undefined; readerReady = false;
+    const message = t('书籍工程或阅读服务暂时无法打开，原目录选择保持。请重新选择完整工程目录，或返回本机书架。', 'The book project or reading service could not be opened. The selected location is retained. Choose a complete project folder again, or return to the local library.');
+    projectRequest.error = message;
+    window?.setTitle(t('工程暂时无法打开 · 宜序伴读', 'Project Could Not Open · Yixu Reading Companion')); window?.setProgressBar(-1);
+    setStartupStatus('error', message);
+    if (window && !window.isDestroyed()) void window.loadFile(path.join(__dirname, 'starting.html')).then(() => setStartupStatus('error', message)).catch(() => {});
+    if (!openRequested) console.error(message);
+    updateMenus(); publish();
+  }
+  async function startServer(project) {
+    const bundledNode = path.join(root, 'runtime', 'node', 'node.exe');
+    const node = process.env.YIXU_NODE_EXE || (existsSync(bundledNode) ? bundledNode : process.env.npm_node_execpath);
+    if (!node || !existsSync(node)) throw Error('NODE_RUNTIME_UNAVAILABLE');
+    const logs = path.join(config.dataRoot, 'client-launcher'); mkdirSync(logs, {recursive: true});
+    const output = createWriteStream(path.join(logs, 'desktop-host.log'), {flags: 'a'});
+    const serverChild = spawn(node, ['--experimental-transform-types', path.join(__dirname, 'server.mjs')], {cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: {...process.env, YIXU_DESKTOP: '1', YIXU_DEVELOPER_MODE: developerMode ? '1' : '0', YIXU_PORT: String(config.port), YIXU_BOOK_PROJECT_ROOT: path.join(app.getPath('documents'), '宜序伴读', '书籍工程'), ...readingProjectEnvironment(config.dataRoot, project)}});
+    child = serverChild; startupFailed = false;
+    childExit = new Promise(resolve => serverChild.once('close', (code, signal) => resolve({code, signal})));
+    serverChild.stdout.pipe(output, {end: false}); serverChild.stderr.pipe(output, {end: false});
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const rejectStartup = () => { if (!settled) { settled = true; reject(Error('READING_SERVICE_UNAVAILABLE')); } else if (!quitting && !switching && child === serverChild) failed(); };
+      serverChild.on('message', message => {
+        if (message.type === 'native-control') { handleNativeControl(message, serverChild); return; }
+        if (message.type === 'ready') {
+          if (child !== serverChild) return;
+          readyURL = message.url;
+          window.loadURL(readyURL).then(() => { if (!settled) { settled = true; startupFailed = false; setStartupStatus('ready', ''); publish(); resolve(); } }).catch(rejectStartup);
+        } else if (message.type === 'fatal') rejectStartup();
+        else if (message.type === 'response') { const request = requests.get(message.id); if (!request || request.child !== serverChild) return; clearTimeout(request.timer); requests.delete(message.id); message.error ? request.reject(Error(message.error)) : request.resolve(message.value); }
+      });
+      serverChild.once('error', rejectStartup);
+      serverChild.once('exit', () => {
+        output.end();
+        for (const [id, request] of requests) if (request.child === serverChild) { clearTimeout(request.timer); requests.delete(id); request.reject(Error(t('后台服务已退出。', 'The background service has exited.'))); }
+        if (!settled || !quitting && !switching) rejectStartup();
+      });
+    });
+  }
+  function receiveProjectIntent(intent) {
+    try { acceptReadingProject(intent.action === 'local-library' ? null : intent.directory, intent.requestId); }
+    catch {
+      projectRequest = {id: intent.requestId, error: projectChoiceError().message};
+      if (readyURL) { setStartupStatus('error', projectRequest.error); publish(); }
+      else failed();
+    }
+  }
+  app.on('second-instance', (_event, _argv, _cwd, intent) => {
+    if (intent?.project) { if (startupFinished) receiveProjectIntent(intent.project); else deferredProjectIntent = intent.project; }
+    if (intent?.show === true) showWindow();
+  });
   app.on('activate', showWindow);
   app.on('before-quit', event => { if (!allowQuit) { event.preventDefault(); if (!quitting) requestClose(); } });
   app.on('window-all-closed', () => { if (allowQuit) app.quit(); });
@@ -197,14 +316,26 @@ function run() {
       if (!trustedRenderer(event)) throw Error('窗口来源不符。');
       return state();
     });
+    ipcMain.handle('yixu:startup-status', event => {
+      if (!trustedRenderer(event)) throw Error('窗口来源不符。');
+      return startupStatus;
+    });
+    ipcMain.handle('yixu:choose-reading-project-directory', async(event, current) => {
+      if (!trustedRenderer(event)) throw Error('窗口来源不符。');
+      return chooseReadingProjectDirectory(current);
+    });
+    ipcMain.handle('yixu:open-reading-project-directory', (event, directory) => {
+      if (!trustedRenderer(event)) throw Error('窗口来源不符。');
+      return acceptReadingProject(directory);
+    });
+    ipcMain.handle('yixu:use-local-library', event => {
+      if (!trustedRenderer(event)) throw Error('窗口来源不符。');
+      return acceptReadingProject(null);
+    });
     ipcMain.handle('yixu:choose-project-directory',async(event,current)=>{
       if(!trustedRenderer(event))throw Error('窗口来源不符。');
-      const selected=await dialog.showOpenDialog(window,{title:t('选择书籍工程存放位置','Choose a Book Project Folder'),...(typeof current==='string'&&path.isAbsolute(current)?{defaultPath:current}:{}),properties:['openDirectory','createDirectory'],buttonLabel:t('使用此文件夹','Use This Folder')});
+      const selected=await dialog.showOpenDialog(window,{title:t('选择工程副本的存放文件夹','Choose a Parent Folder for the Project Copy'),...(typeof current==='string'&&path.isAbsolute(current)?{defaultPath:current}:{}),properties:['openDirectory','createDirectory'],buttonLabel:t('保存到此文件夹','Save in This Folder')});
       return selected.canceled?null:selected.filePaths[0]??null;
-    });
-    ipcMain.handle('yixu:open-project-directory',async(event,directory)=>{
-      if(!trustedRenderer(event)||typeof directory!=='string'||!path.isAbsolute(directory))throw Error('文件夹位置无效。');
-      const error=await shell.openPath(directory);if(error)throw Error(error);
     });
     ipcMain.handle('yixu:open-source-file-directory',async(event,filename)=>{
       if(!trustedRenderer(event)||typeof filename!=='string'||!path.isAbsolute(filename))throw Error(t('原文文件位置无效。','Invalid source file location.'));
@@ -233,26 +364,14 @@ function run() {
     });
     updateMenus();
     await window.loadFile(path.join(__dirname, 'starting.html')); if (openRequested) showWindow();
-    const bundledNode = path.join(root, 'runtime', 'node', 'node.exe');
-    const node = process.env.YIXU_NODE_EXE || (existsSync(bundledNode) ? bundledNode : process.env.npm_node_execpath);
-    if (!node || !existsSync(node)) throw Error(t('未找到独立 Node.js 运行时，请使用完整便携包或通过启动器从源码运行。', 'The bundled Node.js runtime could not be found. Use the complete portable package or the source launcher.'));
-    const logs = path.join(config.dataRoot, 'client-launcher'); mkdirSync(logs, {recursive: true});
-    const output = createWriteStream(path.join(logs, 'desktop-host.log'), {flags: 'a'});
-    child = spawn(node, ['--experimental-transform-types', path.join(__dirname, 'server.mjs')], {cwd: root, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], env: {...process.env, YIXU_DESKTOP: '1', YIXU_DEVELOPER_MODE: developerMode ? '1' : '0', YIXU_PORT: String(config.port), YIXU_CLIENT_DATA_ROOT: config.dataRoot, YIXU_BOOK_PROJECT_ROOT: path.join(app.getPath('documents'), '宜序伴读', '书籍工程'), YIXU_COMPANION_DATA_ROOT: path.join(config.dataRoot, 'companion-host', 'data'), YIXU_COMPANION_HOME: path.join(config.dataRoot, 'companion-host', 'dsh-home')}});
-    childExit = new Promise(resolve => child.once('exit', (code, signal) => resolve({code, signal})));
-    child.stdout.pipe(output, {end: false}); child.stderr.pipe(output, {end: false});
-    child.on('message', message => {
-      if (message.type === 'native-control') { handleNativeControl(message); return; }
-      if (message.type === 'ready') { readyURL = message.url; window.loadURL(readyURL).catch(failed); }
-      else if (message.type === 'fatal') { startupFailed = true; failed(Error(message.message)); }
-      else if (message.type === 'response') { const request = requests.get(message.id); if (!request) return; clearTimeout(request.timer); requests.delete(message.id); message.error ? request.reject(Error(message.error)) : request.resolve(message.value); }
-    });
-    child.once('error', failed);
-    child.once('exit', code => { output.end(); for (const request of requests.values()) { clearTimeout(request.timer); request.reject(Error(t('后台服务已退出。', 'The background service has exited.'))); } requests.clear(); if (!quitting) failed(Error(t(`后台服务意外退出（${code ?? '未知'}），请重新打开客户端。`, `The background service exited unexpectedly (${code ?? 'unknown'}). Please reopen the app.`))); });
-    function failed(error) {
-      window?.setTitle(t('启动或连接未完成 · 宜序伴读', 'Startup or Connection Failed · Yixu Reading Companion'));
-      if (openRequested) { showWindow(); dialog.showErrorBox(t('宜序伴读启动或连接未完成', 'Yixu Reading Companion Could Not Start or Connect'), error.message); }
-      else { console.error(error.message); if (startupFailed && !quitting) void exitGracefully(false); }
-    }
+    try {
+      if (launchProjectIntent) {
+        projectRequest = {id: launchProjectIntent.requestId};
+        readingProject = launchProjectIntent.action === 'local-library' ? null : readReadingProject(launchProjectIntent.directory);
+        saveReadingProjectSelection(config.dataRoot, readingProject);
+      } else readingProject = selectedReadingProject(config.dataRoot);
+      await startServer(readingProject);
+    } catch (error) { failed(error); }
+    finally { startupFinished = true; if (deferredProjectIntent) receiveProjectIntent(deferredProjectIntent); }
   }).catch(error => { if (openRequested) dialog.showErrorBox(t('宜序伴读启动未完成', 'Yixu Reading Companion Could Not Start'), error.message); else console.error(error.message); quitting = true; allowQuit = true; app.quit(); });
 }

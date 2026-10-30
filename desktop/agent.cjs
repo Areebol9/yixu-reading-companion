@@ -81,8 +81,46 @@ async function main() {
     if (value.receipt.error) throw Error(value.receipt.error);
     return value.receipt.value;
   }
+  async function launchDesktop(extraArgs) {
+    const electron = ['runtime/electron/Yixu Reading Companion.exe', 'runtime/electron/electron.exe', 'node_modules/electron/dist/electron.exe'].map(relative => path.join(root, relative)).find(filename => fs.existsSync(filename));
+    if (!electron) throw Error('未找到完整Electron运行时。');
+    if (!fs.existsSync(path.join(root, 'dist/workbench.html'))) throw Error('阅读界面尚未构建，请先运行 npm run build。');
+    const logs = path.join(config.dataRoot, 'client-launcher'); await fsp.mkdir(logs, {recursive: true});
+    const log = fs.openSync(path.join(logs, 'agent-launch.log'), 'a'), launched = {};
+    const child = spawn(electron, [root, options.show ? '--show' : '--yixu-headless', ...(options.developer ? ['--developer'] : []), ...extraArgs], {cwd: root, detached: true, windowsHide: true, stdio: ['ignore', log, log], env: {...process.env, YIXU_NODE_EXE: process.execPath}});
+    fs.closeSync(log);
+    child.once('error', () => { launched.ended = {error: true}; });
+    child.once('exit', (code, signal) => { launched.ended = {code, signal}; });
+    child.unref();
+    return launched;
+  }
+  async function selectReadingLocation(action, directory) {
+    // Probe only availability before dispatching a selection. A failed selection
+    // request is never replayed through a second transport.
+    let connection, offline = false;
+    try { connection = await discovery(); await request({action: 'status'}, connection, Math.min(timeout, 5000)); }
+    catch (error) { if (!['NOT_READY', 'CONNECTION_UNAVAILABLE'].includes(error.code)) throw error; offline = true; }
+    if (!offline) return request({action, ...(directory ? {directory} : {})}, connection);
+    const requestId = randomUUID();
+    const launched = await launchDesktop([directory ? '--yixu-open-project=' + directory : '--yixu-local-library', '--yixu-project-request=' + requestId]);
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      let value;
+      try { value = await request({action: 'status'}, undefined, Math.min(5000, Math.max(1000, deadline - Date.now()))); }
+      catch (error) { if (!['NOT_READY', 'CONNECTION_UNAVAILABLE'].includes(error.code)) throw error; }
+      if (value?.nativeState?.projectSelectionRequestId === requestId && !value.nativeState.switching) {
+        if (value.nativeState.projectSelectionError) throw fail(value.nativeState.projectSelectionError, {code: 'PROJECT_SELECTION_FAILED'});
+        return value;
+      }
+      // A secondary Electron process exits successfully after handing its intent
+      // to the existing native instance. That handoff is still being completed.
+      if (launched.ended?.error || launched.ended?.code && launched.ended.code !== 0) throw Error('客户端启动未完成。可打开客户端重新选择工程，或返回本机书架。');
+      await sleep(200);
+    }
+    throw fail('客户端尚未确认打开所选位置。原目录选择和记录保持，可在客户端重新选择；本命令未重复提交。', {code: 'PROJECT_SELECTION_PENDING', dispatch: 'accepted'});
+  }
   const action = positional[0];
-  if (!action || action === 'help') return {ok: true, commands: ['start --headless [--developer]', 'status', 'snapshot', 'auto-read --json <settings>', 'command <name> --json "<args array>"', 'operation <commandId> --archive-id <id> --epoch <epoch>', 'import <path> [--kind text|backup]', 'extend-source <path> --book-id <id> [--title <title>]', 'export --file <path> [--kind backup|record]', 'pause', 'open', 'hide', 'quit'], options: {dataDirectory: '--data-dir <path>', timeoutMilliseconds: '--timeout <ms>'}};
+  if (!action || action === 'help') return {ok: true, commands: ['start --headless [--developer]', 'status', 'snapshot', 'open-project <directory>', 'local-library', 'auto-read --json <settings>', 'command <name> --json "<args array>"', 'operation <commandId> --archive-id <id> --epoch <epoch>', 'import <path> [--kind text|backup]', 'extend-source <path> --book-id <id> [--title <title>]', 'export --file <path> [--kind backup|record]', 'pause', 'open', 'hide', 'quit'], options: {dataDirectory: '--data-dir <path>', timeoutMilliseconds: '--timeout <ms>'}};
   if (action === 'start') {
     try {
       const existing = await request({action: 'status'}, undefined, Math.min(timeout, 5000));
@@ -90,23 +128,13 @@ async function main() {
       if (options.show) await request({action: 'open'});
       return {ok: true, reused: true, ...existing};
     } catch (error) { if (!['NOT_READY', 'CONNECTION_UNAVAILABLE'].includes(error.code)) throw error; }
-    const electron = ['runtime/electron/Yixu Reading Companion.exe', 'runtime/electron/electron.exe', 'node_modules/electron/dist/electron.exe'].map(relative => path.join(root, relative)).find(filename => fs.existsSync(filename));
-    if (!electron) throw Error('未找到完整Electron运行时。');
-    if (!fs.existsSync(path.join(root, 'dist/workbench.html'))) throw Error('阅读界面尚未构建，请先运行 npm run build。');
-    const logs = path.join(config.dataRoot, 'client-launcher'); await fsp.mkdir(logs, {recursive: true});
-    const log = fs.openSync(path.join(logs, 'agent-launch.log'), 'a');
-    let ended;
-    const child = spawn(electron, [root, options.show ? '--show' : '--yixu-headless', ...(options.developer ? ['--developer'] : [])], {cwd: root, detached: true, windowsHide: false, stdio: ['ignore', log, log], env: {...process.env, YIXU_NODE_EXE: process.execPath}});
-    fs.closeSync(log);
-    child.once('error', error => { ended = {error: error.message}; });
-    child.once('exit', (code, signal) => { ended = {code, signal}; });
-    child.unref();
+    const launched = await launchDesktop([]);
     const deadline = Date.now() + timeout;
     let lastError;
     while (Date.now() < deadline) {
       try { const value = await request({action: 'status'}, undefined, Math.max(1000, deadline - Date.now())); return {ok: true, reused: false, ...value}; }
       catch (error) { lastError = error; }
-      if (ended) throw Error('客户端启动未完成，请查看数据目录内 client-launcher/agent-launch.log。');
+      if (launched.ended) throw Error('客户端启动未完成，请查看数据目录内 client-launcher/agent-launch.log。');
       await sleep(200);
     }
     throw Error('客户端认证入口尚未就绪，请查看启动日志；本命令未重复启动。' + (lastError?.code ? ' ' + lastError.code : ''));
@@ -128,6 +156,11 @@ async function main() {
     throw fail('客户端正在等待已发出的回复并保存，完成后自动退出。请稍后查询退出状态。', {code: 'EXIT_PENDING', dispatch: 'accepted'});
   }
   if (['status', 'snapshot', 'pause', 'open', 'hide'].includes(action)) return {ok: true, ...await request({action})};
+  if (action === 'open-project') {
+    if (!positional[1]) throw Error('请提供要打开的书籍工程目录。');
+    return {ok: true, ...await selectReadingLocation(action, path.resolve(positional[1]))};
+  }
+  if (action === 'local-library') return {ok: true, ...await selectReadingLocation(action)};
   if (action === 'auto-read') {
     const settings = JSON.parse(options.json ?? '{}');
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw Error('--json 必须为自动阅读设置对象。');

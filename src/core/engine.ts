@@ -41,8 +41,8 @@ import {selectAndReadMemoryDocuments} from './memory-discovery.ts';
 import {answerScopeFor,answerPreparationPolicy,prepareAnswerTool,parseAnswerAspects} from './answer-materials.ts';
 import type {AnswerScope,AnswerPreparation} from './answer-materials.ts';
 import type {MemoryDocumentQuery} from './memory-discovery.ts';
-import {prepareMemoryIdentities,prepareMemoryTextIdentity,memoryContentIdentity,memoryReadVersion,memoryReadVersionDifferences,recordVerifiedMemoryIdentity,stampsEqual} from './memory-identity.ts';
-import {isReasoningOnlyLengthResponse,parseReadingSubmissionPayload,readingFeedback,readingDocumentsShape,readingDocumentsTool,readingDocumentsToolFor,readingDocumentsOutputPolicy,restoreReadingSubmission,sceneParticipationTool,sceneMaterialTools} from './reading-output.ts';
+import {prepareMemoryIdentities,prepareMemoryTextIdentity,memoryContentIdentity,memoryReadVersion,memoryReadVersionDifferences,recordVerifiedMemoryIdentity,stampsEqual,MemoryIdentityError} from './memory-identity.ts';
+import {isReasoningOnlyLengthResponse,parseReadingSubmissionPayload,readingFeedback,readingDocumentsShape,readingDocumentsTool,readingDocumentsToolFor,readingDocumentsOutputPolicy,readingDocumentsArrayError,restoreReadingSubmission,sceneParticipationTool,sceneMaterialTools} from './reading-output.ts';
 import {ReadingDocumentError,validateMergedMemoryLineage,validateDocumentLifecycle} from './document-revision.ts';
 import {taskMaterialReference,resolveStorageMaterials,releaseStorageMaterials,acknowledgeTaskMaterial} from './storage-records.ts';
 import {conversationMaterial,conversationMaterials,referenceProvidedConversation,conversationExposureCandidates,currentFullMemoryIds,currentFullViewIds,taskMaterialExposures,taskFullMemoryIds,memoryMaterial,navigationPage,selectCompanionInitialMaterials,sceneRecordAllowed,materialMemorySourceChecker,observeMaterialExposures} from './material-projection.ts';
@@ -4403,7 +4403,7 @@ export class ReadingEngine {
     const messageReactions=finalOnly?[]:this.messageEmojiReactionTools(book,ctx,controller,generation,options);available.push(...messageReactions);
     const result = await this.withAgentModel(controller, this.queryScope(book,ctx,generation,finalOnly,tools.webSources,options), purpose, !!options.reading, transport => this.agent!.run({
       ...transport,
-      isLocalToolFailure:error=>error instanceof ReadingMaterialError||error instanceof SceneSaveError||error instanceof QuerySaveError,
+      isLocalToolFailure:error=>error instanceof MemoryIdentityError||error instanceof ReadingMaterialError||error instanceof SceneSaveError||error instanceof QuerySaveError,
       ...(messageReactions.length?{runtimeContext:()=>this.messageEmojiReactionContext(book,ctx)}:{}),
       ...(sessionInput?{session:sessionInput}:{}),...(ctx.projectDirectory?{projectDirectory:ctx.projectDirectory}:{}),...(ctx.sessionDirectory?{sessionDirectory:ctx.sessionDirectory}:{}),materialExposure:this.materialExposure(book,ctx),task:{id:sessionInput?.id??ctx.modelRequestKey!,role:options.draft?.source==='preparation'||options.draft?.source==='background'?'preparation':ctx.taskRole==='maintenance'?'maintenance':'companion',presetId:options.draft?.source==='preparation'||options.draft?.source==='background'?'companion-preparation':ctx.taskRole==='maintenance'?'companion-maintenance':'companion'},...(sessionInput&&ctx.taskRole!=='maintenance'?{delegation:this.delegationPort(book,ctx,controller,generation,options,sessionInput.id,transport.service)}:{}),
       ...(ctx.resumePayload?{resumePayload:ctx.resumePayload}:{}),
@@ -4508,7 +4508,7 @@ export class ReadingEngine {
     }
     let result:ReadingReply;
     try{result=await this.validateAgentResult(book,ctx,decoded,options,webSources);}
-    catch(error){throw new ReadingDocumentError([...errors,...(error instanceof ReadingDocumentError?error.errors:[(error as Error).message])],error instanceof ReadingDocumentError?error.requiredMemoryIds:undefined,error instanceof ReadingDocumentError?error.requiredViewIds:undefined,error instanceof ReadingDocumentError?error.issues:undefined,error instanceof ReadingDocumentError?error.requiredMemoryRanges:undefined);}
+    catch(error){if(error instanceof MemoryIdentityError||error instanceof ReadingMaterialError)throw error;throw new ReadingDocumentError([...errors,...(error instanceof ReadingDocumentError?error.errors:[(error as Error).message])],error instanceof ReadingDocumentError?error.requiredMemoryIds:undefined,error instanceof ReadingDocumentError?error.requiredViewIds:undefined,error instanceof ReadingDocumentError?error.issues:undefined,error instanceof ReadingDocumentError?error.requiredMemoryRanges:undefined);}
     this.assertStrategyReply(ctx,result);ctx.outputDelivery={protocol:'reading-documents-v1',proposal:'none'};
     return result;
   }
@@ -4567,10 +4567,11 @@ export class ReadingEngine {
    * remain separate facts. A failed view never rolls those documents back. */
   private async acceptMaintenanceDocuments(book:Book,ctx:ReadingContext,candidate:Record<string,unknown>,submission:ReadingSubmission,controller:AbortController,generation:number,options:ReadingToolOptions,webSources:WebReference[]):Promise<ReadingReply>{
     const claim=ctx.maintenanceClaim,jobId=ctx.maintenanceJobId;
-    if(!claim||!jobId||!Array.isArray(candidate.documents))throw new ReadingDocumentError(['维护结果须有原任务与documents数组']);
+    if(!claim||!jobId)throw new ReadingMaterialError('维护结果缺少原任务身份');
+    const documentsError=readingDocumentsArrayError(candidate.documents);if(documentsError)throw new ReadingDocumentError([documentsError]);
     const usage=this.state.usage.find(item=>item.id===submission.usageId)??this.state.usage.find(item=>item.id===this.state.maintenanceJobs?.find(job=>job.id===jobId)?.pendingDispatch?.usageId);
     if(!usage?.maintenanceDispatch||usage.maintenanceDispatch.claim.hash!==claim.hash||usage.status!=='complete'||usage.dispatchState!=='response-received'||usage.modelOutcome)throw new ReadingMaterialError('维护原响应尚未完整保存');
-    const documents=candidate.documents,hashes=await Promise.all(documents.map(maintenanceDocumentHash)),bindings=new Map<string,string>(),errors:string[]=[],requiredMemories=new Set<string>(),requiredRanges:DocumentReadRequirement[]=[],savedThoughts:ReadingReply['thoughts']=[];
+    const documents=candidate.documents as unknown[],hashes=await Promise.all(documents.map(maintenanceDocumentHash)),bindings=new Map<string,string>(),errors:string[]=[],requiredMemories=new Set<string>(),requiredRanges:DocumentReadRequirement[]=[],savedThoughts:ReadingReply['thoughts']=[];
     const facts=()=>this.state.usage.flatMap(item=>item.maintenanceDispatch?.request.maintenanceJobId===jobId&&item.maintenanceDispatch.claim.hash===claim.hash?item.maintenanceDispatch.progress??[]:[]);
     const emptyProcessed=()=>({ranges:[],chatIds:[],sceneRecordIds:[],viewTargets:[]});
     const attach=async(index:number,memoryId:string|undefined)=>{
@@ -4600,7 +4601,7 @@ export class ReadingEngine {
         await this.commitResult(book.id,generation,plan,{operationFinal:false,workspace:this.workspaceCommit(local,result),maintenanceProgress:{jobId,usageId:usage.id,claimHash:claim.hash,receipt}});
         ctx.historicalSourceIds=[...new Set([...(ctx.historicalSourceIds??[]),...(plan.developments??[]).map(change=>change.previousId)])];
         for(const item of receipt.documents!)await attach(item.index,item.memoryId);
-      }catch(error){if(error instanceof ReadingMaterialError||error instanceof DOMException&&error.name==='AbortError')throw error;if(error instanceof ReadingDocumentError){error.requiredMemoryIds?.forEach(id=>requiredMemories.add(id));requiredRanges.push(...(error.requiredMemoryRanges??[]));}errors.push(...(error instanceof ReadingDocumentError?error.errors:[(error as Error).message]).map(message=>'documents '+indexes.map(index=>'t'+(index+1)).join(',')+'：'+message.replace(/\bdocuments\[(\d+)\]/g,(field,localIndex)=>indexes[Number(localIndex)]===undefined?field:'documents['+indexes[Number(localIndex)]+']')));}
+      }catch(error){if(error instanceof MemoryIdentityError||error instanceof ReadingMaterialError||error instanceof DOMException&&error.name==='AbortError')throw error;if(error instanceof ReadingDocumentError){error.requiredMemoryIds?.forEach(id=>requiredMemories.add(id));requiredRanges.push(...(error.requiredMemoryRanges??[]));}errors.push(...(error instanceof ReadingDocumentError?error.errors:[(error as Error).message]).map(message=>'documents '+indexes.map(index=>'t'+(index+1)).join(',')+'：'+message.replace(/\bdocuments\[(\d+)\]/g,(field,localIndex)=>indexes[Number(localIndex)]===undefined?field:'documents['+indexes[Number(localIndex)]+']')));}
     }
     if(bindings.size){const workspace=workspaceFor(this.taskState(ctx),book,ctx.workspaceSource);ctx.workspaceSnapshot=structuredClone(workspace);ctx.workspaceRevision=workspace.revision;ctx.workspaceVersion=workspaceVersionOf(workspace);}
     if(errors.length)throw new ReadingDocumentError([...errors,...(bindings.size?['已保存'+bindings.size+'份独立文档；原candidate及tN不变，只修上述文档，已保存操作不重复执行。']:[])],[...requiredMemories],undefined,undefined,requiredRanges.length?requiredRanges:undefined);
@@ -4652,7 +4653,7 @@ export class ReadingEngine {
         const next={...state,publishedViews:[...(state.publishedViews??[]),...prepared.added]},completed=ownedTargets.filter(target=>maintenanceViewTargetComplete(next,book,target,prepared.added));
         const receipt:import('./types.ts').MaintenanceProgressReceipt={operationKey:'views:'+await hashText(JSON.stringify(indexes.map(index=>[index,hashes[index]]))),at:Date.now(),memoryIds:[],viewIds:prepared.added.map(view=>view.id),views:indexes.map(index=>({index,hash:hashes[index],viewIds:prepared.added.map(view=>view.id)})),processed:{ranges:[],chatIds:[],viewTargets:completed}};
         await this.commitResult(book.id,generation,{added:[],reused:[],ids:[]},{operationFinal:false,viewsPlan:prepared,maintenanceProgress:{jobId,usageId:usage.id,claimHash:claim.hash,receipt}});added.push(...prepared.added);
-      }catch(error){if(error instanceof ReadingMaterialError||error instanceof DOMException&&error.name==='AbortError')throw error;errors.push(...(error instanceof ReadingDocumentError?error.errors:[(error as Error).message]));if(error instanceof ReadingDocumentError){issues.push(...(error.issues??[]));error.requiredViewIds?.forEach(id=>requiredViews.add(id));error.requiredMemoryIds?.forEach(id=>requiredMemories.add(id));}}
+      }catch(error){if(error instanceof MemoryIdentityError||error instanceof ReadingMaterialError||error instanceof DOMException&&error.name==='AbortError')throw error;errors.push(...(error instanceof ReadingDocumentError?error.errors:[(error as Error).message]));if(error instanceof ReadingDocumentError){issues.push(...(error.issues??[]));error.requiredViewIds?.forEach(id=>requiredViews.add(id));error.requiredMemoryIds?.forEach(id=>requiredMemories.add(id));}}
     }
     if(errors.length)throw new ReadingDocumentError(errors,[...requiredMemories],[...requiredViews],issues);
     return{added:[...new Map(added.map(view=>[view.id,view])).values()]};
@@ -4790,7 +4791,7 @@ export class ReadingEngine {
       }
       if(ctx.taskRole==='maintenance'&&ctx.maintenanceClaim){const basisErrors=maintenanceViewBasisErrors(this.taskState(ctx),book,{...ctx.maintenanceClaim,viewTargets:required.filter(target=>!missingTargets.includes(target))},ctx.preparedViews?.added??[],proposedMemoryIds,ctx.memories.map(m=>m.id),ctx.originalRanges,ctx.maintenanceReviewBatch?ctx.maintenanceReviewMemoryIds:undefined);if(basisErrors.length)throw Error(basisErrors.join('；'));}
       return{accepted:true,result,errors,expressionDelivery};
-    }catch(error){if(error instanceof MaintenanceCapacityError||error instanceof SceneSaveError||error instanceof SceneSourceError||error instanceof QuerySaveError||error instanceof ReadingMaterialError)throw error;
+    }catch(error){if(error instanceof MemoryIdentityError||error instanceof MaintenanceCapacityError||error instanceof SceneSaveError||error instanceof SceneSourceError||error instanceof QuerySaveError||error instanceof ReadingMaterialError)throw error;
       const independent=ctx.taskRole==='maintenance'&&parsedCandidate?this.knownViewProblems(book,ctx,parsedCandidate):undefined;
       if(independent)error=new ReadingDocumentError([...new Set([...(error instanceof ReadingDocumentError?error.errors:[(error as Error).message]),...independent.errors])],error instanceof ReadingDocumentError?error.requiredMemoryIds:undefined,[...new Set([...(error instanceof ReadingDocumentError?error.requiredViewIds??[]:[]),...(independent.requiredViewIds??[])])],[...(error instanceof ReadingDocumentError?error.issues??[]:[]),...(independent.issues??[])],error instanceof ReadingDocumentError?error.requiredMemoryRanges:undefined);
       errors.push(...(error instanceof ReadingDocumentError?error.errors:[(error as Error).message]));
@@ -5219,7 +5220,7 @@ export class ReadingEngine {
         const sourceChatIds=[...new Set([...ctx.chatIds,...(options.conversation&&ctx.requestQuestionId?[ctx.requestQuestionId]:[])])].filter(id=>!historical.includes(id));
         let plan:MemoryPlan;
         try{plan=await this.planReadingMemories(book,ctx,reply,options.memorySource??'reading',webSources,Array.isArray(task)?task:[task],sourceChatIds);}
-        catch(error){throw new ReadingDocumentError(error instanceof ReadingDocumentError?error.errors:[(error as Error).message]);}
+        catch(error){if(error instanceof MemoryIdentityError||error instanceof ReadingMaterialError)throw error;throw new ReadingDocumentError(error instanceof ReadingDocumentError?error.errors:[(error as Error).message]);}
         reply={...reply,thoughts:plan.result?.thoughts??reply.thoughts};
         if(ctx.readingStrategy==='companion'&&reply.workspace!==undefined){const candidate:State={...formed,companionWorkspaces:[...(formed.companionWorkspaces??[]).filter(w=>!(w.bookId===current.bookId&&w.version===current.version&&w.partnerId===current.partnerId&&w.source===current.source)),current],memories:[...formed.memories.map(m=>plan.developments?.some(d=>d.previousId===m.id)?{...m,replacedBy:plan.developments.find(d=>d.previousId===m.id)!.nextId}:m),...plan.added]};const workspace=planWorkspace(candidate,book,reply.workspace,{memoryIds:[...new Set([...ctx.memories.map(m=>m.id),...ctx.references.snapshot().memory.map(([id])=>id),...(reply.workspace?.working??[]),...(reply.workspace?.focus??[])])],proposalMemoryIds:plan.proposalMemoryIds},{expectedRevision:current.revision,source:ctx.workspaceSource});if(!options.conversation)plan.preparedWorkspace=workspace;}
         const material=await this.queryMaterial(ctx,webSources);plan.formation={material,stamp:queryMaterialStamp(formed,material)};ctx.preparedMemory={resultStamp:this.memoryProposalStamp(reply),plan};
@@ -5251,11 +5252,14 @@ export class ReadingEngine {
     if(this.computationPort){
       const input={scope:this.memoryComputationScope(state,book,ctx,result,chatIds,lineage.formationSources),result,refs:ctx.refs,parents,chatIds,source,webSources,habitIds,originalRanges:ctx.originalRanges,passages:[...ctx.sources.passages],readingStage:readingStageFor(ranges,ctx.originalRanges),options};
       plan=await this.computationPort.planMemories(input,{lane:ctx.taskRole==='maintenance'?'background':'foreground'});
-      // The worker calculates an immutable proposal. Live authority remains in
-      // this engine and is checked again before the sole write transaction.
-      this.assertReadingMaterialSources(book,ctx);
     }else{plan=planMemories(state,book,result,ctx.refs,parents,chatIds,source,webSources,habitIds,ctx.originalRanges,ctx.sources.passages,readingStageFor(ranges,ctx.originalRanges),options);validatePlannedDocumentSubjects(state,plan);}
 
+    // Worker replies carry new objects, not this process's verification cache.
+    // Prepare only the plan's authored bodies before synchronous provenance and
+    // own-write checks can include them. Existing source preparation stays local.
+    await prepareMemoryIdentities(plan.added);
+    // The worker and body hashing both yield; retain live authority in the host.
+    if(this.computationPort)this.assertReadingMaterialSources(book,ctx);
     return plan;
   }
   private memoryComputationScope(state:State,book:Book,ctx:ReadingContext,result:ReadingReply,chatIds:string[],audit:import('./types.ts').FormationSources):import('./computation-port.ts').MemoryComputationScope{

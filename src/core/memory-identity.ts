@@ -2,6 +2,10 @@ import type {Memory} from './types.ts';
 import {hashText} from './text-hash.ts';
 
 type Identity={hash:string;chars:number};
+/** Host preparation failures are local faults, never model correction requests. */
+export class MemoryIdentityError extends Error {
+  constructor(message:string){super(message);this.name='MemoryIdentityError';}
+}
 const prepared=new WeakMap<Memory,{text:string;identity:Identity}>();
 const byText=new Map<string,Identity>();
 let cachedChars=0;
@@ -17,7 +21,7 @@ export async function prepareMemoryTextIdentity(text:string):Promise<Identity> {
 }
 /** Called after the embedding store has verified these exact bytes. */
 export function recordVerifiedMemoryIdentity(memory:Memory,hash:string,text:string):void {
-  if(!/^[0-9a-f]{64}$/.test(hash)||memory.text!==text)throw Error('阅读档案正文身份未对应当前正文');
+  if(!/^[0-9a-f]{64}$/.test(hash)||memory.text!==text)throw new MemoryIdentityError('阅读档案正文身份未对应当前正文');
   prepared.set(memory,{text,identity:{hash,chars:text.length}});
   rememberTextIdentity(text,{hash,chars:text.length});
 }
@@ -29,7 +33,7 @@ export async function prepareMemoryIdentities(memories:readonly Memory[]):Promis
     const text=memory.text,old=prepared.get(memory);if(old?.text===text)return;
     const known=byText.get(text);if(known){recordVerifiedMemoryIdentity(memory,known.hash,text);return;}
     const hash=await hashText(text);
-    if(memory.text!==text)throw Error('阅读档案正文在计算来源身份时变化');
+    if(memory.text!==text)throw new MemoryIdentityError('阅读档案正文在计算来源身份时变化');
     recordVerifiedMemoryIdentity(memory,hash,text);
   }));
 }
@@ -37,11 +41,11 @@ export async function prepareMemoryIdentities(memories:readonly Memory[]):Promis
 export function memoryContentIdentity(memory:Memory):Identity {
   if(typeof memory.text==='string'){
     const cached=prepared.get(memory),identity=cached?.text===memory.text?cached.identity:byText.get(memory.text);
-    if(!identity)throw Error('阅读档案正文来源身份尚未准备，请先计算当前正文');
+    if(!identity)throw new MemoryIdentityError('阅读档案正文来源身份尚未准备，请先计算当前正文');
     return {...identity};
   }
   const ref=memory.bodyRef;
-  if(!ref||!/^[0-9a-f]{64}$/.test(ref.hash)||!Number.isSafeInteger(ref.chars)||ref.chars<0)throw Error('阅读档案正文来源身份缺失');
+  if(!ref||!/^[0-9a-f]{64}$/.test(ref.hash)||!Number.isSafeInteger(ref.chars)||ref.chars<0)throw new MemoryIdentityError('阅读档案正文来源身份缺失');
   return {hash:ref.hash,chars:ref.chars};
 }
 /** The exact pre-externalization record shape used by historical repair stamps. */

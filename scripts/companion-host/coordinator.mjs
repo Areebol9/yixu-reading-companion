@@ -4,6 +4,7 @@ import {createHash, randomUUID} from 'node:crypto';
 import {NodeStore} from '../../src/host/node-store.ts';
 import {SessionRepository} from '../../src/host/session-repository.ts';
 import {startCompanionHost} from './start.mjs';
+import {readReadingProject} from '../../src/host/reading-project.ts';
 
 const sha = text => createHash('sha256').update(text).digest('hex');
 const validId = id => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id);
@@ -111,6 +112,14 @@ export function createCompanionCoordinator(workspaceRoot,{startHost=startCompani
     if (input.action === 'connect') return connect(input.archiveId, origin);
     if (input.action === 'new'||input.action==='current') {
       return openingCurrent??=(async()=>{
+      if(process.env.YIXU_OPENED_PROJECT_DIRECTORY){
+        const project=await readReadingProject(process.env.YIXU_OPENED_PROJECT_DIRECTORY);
+        if(project.archiveId!==process.env.YIXU_OPENED_PROJECT_ARCHIVE_ID||resolve(dataRoot)!==resolve(process.env.YIXU_OPENED_PROJECT_DIRECTORY,'data'))throw Error('所选工程与启动位置不一致，请重新打开工程。');
+        const repo=repository();
+        if(!repo.list().some(item=>item.id===project.archiveId))repo.remember({id:project.archiveId,mode:'live',title:project.title,createdAt:project.createdAt,storageLocation:'host'});
+        repo.markActive(project.archiveId);await repo.flush();
+        return connect(project.archiveId,origin);
+      }
       // Browser migration uses "new" for startup with no browser archive. Explicit
       // archive creation belongs to the application's createSession command.
       let catalog;

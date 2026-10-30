@@ -21,6 +21,8 @@ import type {Context} from '@deepseek-ai/cordis';
 import * as OfficialJsonl from '@deepseek-ai/dsh-session-persistence-jsonl';
 import {createNativeSpillStreamReader,restoreNativeSpills} from '../agent/spill.ts';
 import {providerBridge} from './provider-gateway.ts';
+import {saveReadingProjectCopy} from './reading-project.ts';
+import {initialState} from '../core/state.ts';
 
 /** File transport only. Ownership, version proof and saving stay in the normal
  * application operation, after the explicitly selected archive is paused. */
@@ -34,6 +36,7 @@ export async function importBookSourceFile(controller:Pick<WorkbenchController,'
 const factory: HostDomainFactory = {
   async openArchive({archiveId, archiveDirectory, dshContext, projectRegistry}) {
     const dataRoot = dirname(dirname(archiveDirectory));
+    const nativeHome=process.env.YIXU_COMPANION_NATIVE_HOME??process.env.DSH_HOME!;
     const stores = new Map<string, NodeStore>(), projects = new Map([[archiveId, projectRegistry]]);
     let portableImport:NodeStore|undefined;
     const bridge = await providerBridge();
@@ -53,20 +56,27 @@ const factory: HostDomainFactory = {
       if(id===archiveId)await access(filename);
       if(portableImport&&id!==archiveId){await mkdir(directory,{recursive:true});await portableImport.createExportSnapshot(filename);}
       const store = new NodeStore(filename,join(dataRoot,'receipts'));
-      if(id===archiveId){store.readNativeAgentSession = createNativeSessionReader(dshContext,join(process.env.DSH_HOME!,'archives',id,'sessions'));store.readNativeAgentSessionStream=createNativeSessionStreamReader(dshContext,join(process.env.DSH_HOME!,'archives',id,'sessions'));store.readNativeAgentOriginal=createNativePrefixReader(join(process.env.DSH_HOME!,'archives',id,'sessions'),store.readNativeAgentSessionStream);store.readNativeConversationCheckpoint=createNativeConversationCheckpointReader(join(process.env.DSH_HOME!,'archives',id,'sessions'));store.readNativeAgentSpills=createNativeSpillStreamReader();stores.set(id, store);}return store;
+      if(process.env.YIXU_OPENED_PROJECT_DIRECTORY&&id===archiveId){
+        const state=await store.load();
+        if(state&&!state.settings.services.length){
+          const defaults=initialState().settings;
+          await store.applyChanges({id:randomUUID(),collections:{},set:{settings:{...state.settings,services:defaults.services,serviceId:defaults.serviceId}}});
+        }
+      }
+      if(id===archiveId){store.readNativeAgentSession = createNativeSessionReader(dshContext,join(nativeHome,'archives',id,'sessions'));store.readNativeAgentSessionStream=createNativeSessionStreamReader(dshContext,join(nativeHome,'archives',id,'sessions'));store.readNativeAgentOriginal=createNativePrefixReader(join(nativeHome,'archives',id,'sessions'),store.readNativeAgentSessionStream);store.readNativeConversationCheckpoint=createNativeConversationCheckpointReader(join(nativeHome,'archives',id,'sessions'));store.readNativeAgentSpills=createNativeSpillStreamReader();stores.set(id, store);}return store;
     };
     let controller: WorkbenchController;
     const synchronizeProjects=async()=>{const snapshot=controller.getSnapshot();for(const book of snapshot.app.state.books)await registry(snapshot.sessionId).ensure(book);for(const partner of snapshot.app.state.partners)await registry(snapshot.sessionId).ensurePartner(partner);};
     try {
       controller = await WorkbenchController.create({sessions, createStore, initialArchiveId: archiveId,fixedArchiveId:archiveId, browserEvents: false,developerMode:process.env.YIXU_DESKTOP!=='1'||process.env.YIXU_DEVELOPER_MODE==='1',
-        createHarness: () => new WorkerHarnessRuntime(join(process.env.DSH_HOME!,'archives',archiveId)), bridge: bridge.request,
+        createHarness: () => new WorkerHarnessRuntime(join(nativeHome,'archives',archiveId)), bridge: bridge.request,
         createFactReviewer(runner){if(!(runner instanceof WorkerHarnessRuntime))throw Error('事实核对必须使用同一宿主原生runtime');return new HarnessFactReviewer(runner);},
         async initializeEngine(id,engine){
           engine.computationPort=computation;
           await engine.initializeNativeSessions(async input=>{
             const record=engine.state.agentSessions?.find(record=>record.native?.sessionId===input.reference.sessionId),book=engine.state.books.find(book=>book.id===record?.bookId);if(!book)throw Error('原生会话所属书籍不存在');
             const projectDirectory=(await registry(id).ensure(book)).executionDirectory;
-            return restoreNativeSpills({...input,projectDirectory,reference:await relocateNativeSession(dshContext,{...input,projectDirectory,nativeRoot:join(process.env.DSH_HOME!,'archives',id,'sessions')})});
+            return restoreNativeSpills({...input,projectDirectory,reference:await relocateNativeSession(dshContext,{...input,projectDirectory,nativeRoot:join(nativeHome,'archives',id,'sessions')})});
           });
           const report=await recoverCommittedSessions({context:dshContext,engine,projectDirectory:async bookId=>{const book=engine.state.books.find(book=>book.id===bookId);if(!book)throw Error('冷恢复任务所属书籍不存在');return(await registry(id).ensure(book)).executionDirectory;}});
           for(const item of report)if(item.error)console.warn('原生提交收妥保留原任务：',item.sessionId,item.error);
@@ -80,14 +90,18 @@ const factory: HostDomainFactory = {
           return(await registry(id).ensure(book)).executionDirectory;
         },
         async getBookProjectLocations(id){return registry(id).getLocations();},
-        async setBookProjectRootDirectory(id,rootDirectory){return registry(id).setRootDirectory(rootDirectory);},
+        async saveBookProjectCopy(id,bookId,parentDirectory){
+          const store=stores.get(id);if(!store||id!==archiveId)throw Error('请先打开要保存的书籍');
+          const privateRoot=process.env.YIXU_CLIENT_DATA_ROOT??dataRoot;
+          return saveReadingProjectCopy(store,bookId,parentDirectory,join(privateRoot,'project-preparation'));
+        },
         async attachAgentSession(id, bookId, sessionId) { await registry(id).attachSession(bookId, sessionId); },
         async prepareExport(input){
           if(controller?.getSnapshot().sessionId===input.archiveId){const store=stores.get(input.archiveId);if(!store)throw Error('导出所属存档未打开');return downloads.prepare(store,input);}
           if(!sessions.list().some(session=>session.id===input.archiveId&&session.archivedAt&&session.storageLocation!=='browser'))throw Error('归档尚在原浏览器，原件保持');
           const file=join(dataRoot,'archives',input.archiveId,'domain.sqlite');await access(file);const store=new NodeStore(file,join(dataRoot,'receipts'));
-          const isolated=dshContext.isolate('sessionPersistence'),fork=isolated.plugin(OfficialJsonl,{root:join(process.env.DSH_HOME!,'archives',input.archiveId,'sessions')});
-          try{await fork.await();store.readNativeAgentSessionStream=createNativeSessionStreamReader(isolated,join(process.env.DSH_HOME!,'archives',input.archiveId,'sessions'));store.readNativeAgentOriginal=createNativePrefixReader(join(process.env.DSH_HOME!,'archives',input.archiveId,'sessions'),store.readNativeAgentSessionStream);store.readNativeConversationCheckpoint=createNativeConversationCheckpointReader(join(process.env.DSH_HOME!,'archives',input.archiveId,'sessions'));store.readNativeAgentSpills=createNativeSpillStreamReader();return await downloads.prepare(store,input);}finally{await store.close();await fork.dispose();}
+          const isolated=dshContext.isolate('sessionPersistence'),fork=isolated.plugin(OfficialJsonl,{root:join(nativeHome,'archives',input.archiveId,'sessions')});
+          try{await fork.await();store.readNativeAgentSessionStream=createNativeSessionStreamReader(isolated,join(nativeHome,'archives',input.archiveId,'sessions'));store.readNativeAgentOriginal=createNativePrefixReader(join(nativeHome,'archives',input.archiveId,'sessions'),store.readNativeAgentSessionStream);store.readNativeConversationCheckpoint=createNativeConversationCheckpointReader(join(nativeHome,'archives',input.archiveId,'sessions'));store.readNativeAgentSpills=createNativeSpillStreamReader();return await downloads.prepare(store,input);}finally{await store.close();await fork.dispose();}
         },
       });
       try {

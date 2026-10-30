@@ -104,7 +104,7 @@ export interface WorkbenchClient {
   selectBook(id: string): Promise<void>;
   renameBook(id:string,title:string):Promise<void>;
   getBookProjectLocations():Promise<import('../host/contract.ts').BookProjectLocations>;
-  setBookProjectRootDirectory(directory:string):Promise<import('../host/contract.ts').BookProjectLocations>;
+  saveBookProjectCopy(bookId:string,parentDirectory:string):Promise<{directory:string;title:string}>;
   recognizeBookDirectory(bookId:string,useModel:boolean):Promise<{entries:number;unresolved:boolean}>;
   extendBookSource(id:string,raw:string,title?:string,sourceFile?:import('../core/types.ts').BookSourceFile):Promise<void>;
   jumpTo(position: number): Promise<void>;
@@ -204,7 +204,7 @@ export const workbenchCommands = [
   "selectBook",
   "renameBook",
   "getBookProjectLocations",
-  "setBookProjectRootDirectory",
+  "saveBookProjectCopy",
   "extendBookSource",
   "recognizeBookDirectory",
   "jumpTo",

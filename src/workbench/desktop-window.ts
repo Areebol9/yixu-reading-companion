@@ -1,12 +1,14 @@
 import {useEffect,useState} from 'react';
 import type {AutoReadingSettings} from './contract.ts';
 
-export type DesktopWindowState={visible:boolean;focused:boolean;minimized?:boolean;developerMode:boolean};
+export type DesktopWindowState={visible:boolean;focused:boolean;minimized?:boolean;developerMode:boolean;readingProjectOpen?:boolean;switching?:boolean};
 export interface YixuDesktop {
   setLanguage?(language:'zh-CN'|'en'):Promise<{language:'zh-CN'|'en'}>;
   getWindowState():Promise<DesktopWindowState>;
   chooseProjectDirectory?(current?:string):Promise<string|null>;
-  openProjectDirectory?(directory:string):Promise<void>;
+  chooseReadingProjectDirectory?(current?:string):Promise<string|null>;
+  openReadingProjectDirectory?(directory:string):Promise<{accepted:boolean;switching?:boolean}>;
+  useLocalLibrary?():Promise<{accepted:boolean;switching?:boolean}>;
   getSourceFilePath?(file:File):string;
   openSourceFileDirectory?(filename:string):Promise<void>;
   onWindowStateChanged(listener:(state:DesktopWindowState)=>void):()=>void;
@@ -28,7 +30,7 @@ export function useDesktopWindowState(){
   useEffect(()=>{
     const desktop=window.yixuDesktop;if(!desktop)return;
     let closed=false,received=false;
-    const receive=(value:DesktopWindowState)=>{if(closed)return;latest={visible:value.visible===true,focused:value.focused===true,minimized:value.minimized===true,developerMode:value.developerMode===true};setState(latest);};
+    const receive=(value:DesktopWindowState)=>{if(closed)return;latest={visible:value.visible===true,focused:value.focused===true,minimized:value.minimized===true,developerMode:value.developerMode===true,readingProjectOpen:value.readingProjectOpen===true,switching:value.switching===true};setState(latest);};
     const stop=desktop.onWindowStateChanged(value=>{received=true;receive(value);});
     void desktop.getWindowState().then(value=>{if(!received)receive(value);}).catch(()=>receive(waitingState));
     return()=>{closed=true;stop();};

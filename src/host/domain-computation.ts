@@ -2,13 +2,15 @@ import {Worker} from 'node:worker_threads';
 import {ReadingDocumentError} from '../core/document-revision.ts';
 import {MissingWorldIdentityBindingsError} from '../core/world-identity.ts';
 import {ComputationScopeError} from '../core/computation-port.ts';
+import {MemoryIdentityError} from '../core/memory-identity.ts';
 import type {DomainComputationPort,DomainComputationOptions,MemoryComputationInput,DocumentSubjectsComputationInput} from '../core/computation-port.ts';
 import type {MemoryPlan} from '../core/memory-plan.ts';
 
 type RemoteError={kind:string;name:string;message:string;stack?:string;errors?:string[];requiredMemoryIds?:string[];requiredViewIds?:string[];requiredChatIds?:string[];issues?:ReadingDocumentError['issues'];requiredMemoryRanges?:ReadingDocumentError['requiredMemoryRanges'];bindings?:MissingWorldIdentityBindingsError['bindings']};
 function decodeError(value:RemoteError):Error{
   let error:Error;
-  if(value.kind==='reading-document')error=new ReadingDocumentError(value.errors??[value.message],value.requiredMemoryIds,value.requiredViewIds,value.issues,value.requiredMemoryRanges);
+  if(value.kind==='memory-identity')error=new MemoryIdentityError(value.message);
+  else if(value.kind==='reading-document')error=new ReadingDocumentError(value.errors??[value.message],value.requiredMemoryIds,value.requiredViewIds,value.issues,value.requiredMemoryRanges);
   else if(value.kind==='world-bindings')error=new MissingWorldIdentityBindingsError(value.bindings??[]);
   else if(value.kind==='scope')error=new ComputationScopeError(value.message,value.requiredMemoryIds,value.requiredChatIds);
   else{const Constructor={TypeError,RangeError,SyntaxError,ReferenceError,URIError,EvalError}[value.name as 'TypeError'];error=Constructor?new Constructor(value.message):Error(value.message);error.name=value.name;}

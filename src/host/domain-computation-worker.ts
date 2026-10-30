@@ -1,7 +1,7 @@
 import {parentPort} from 'node:worker_threads';
 import {planMemories} from '../core/memory-plan.ts';
 import {validatePlannedDocumentSubjects} from '../core/document-subjects.ts';
-import {prepareMemoryIdentities,memoryContentIdentity} from '../core/memory-identity.ts';
+import {prepareMemoryIdentities,memoryContentIdentity,MemoryIdentityError} from '../core/memory-identity.ts';
 import {ReadingDocumentError} from '../core/document-revision.ts';
 import {MissingWorldIdentityBindingsError} from '../core/world-identity.ts';
 import {ComputationScopeError} from '../core/computation-port.ts';
@@ -40,6 +40,7 @@ function requireSourceClosure(input:MemoryComputationInput){
 }
 function encodeError(value:unknown){
   const error=value instanceof Error?value:Error(String(value)),common={name:error.name,message:error.message,stack:error.stack};
+  if(error instanceof MemoryIdentityError)return{...common,kind:'memory-identity'};
   if(error instanceof ReadingDocumentError)return{...common,kind:'reading-document',errors:error.errors,requiredMemoryIds:error.requiredMemoryIds,requiredViewIds:error.requiredViewIds,issues:error.issues,requiredMemoryRanges:error.requiredMemoryRanges};
   if(error instanceof MissingWorldIdentityBindingsError)return{...common,kind:'world-bindings',bindings:error.bindings};
   if(error instanceof ComputationScopeError)return{...common,kind:'scope',requiredMemoryIds:error.requiredMemoryIds,requiredChatIds:error.requiredChatIds};

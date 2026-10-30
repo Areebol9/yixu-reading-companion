@@ -8,7 +8,7 @@
     - id: session-persistence
       name: '@deepseek-ai/dsh-session-persistence-jsonl'
       config:
-        root: !!js dshHomePath('archives', process.env.YIXU_COMPANION_ARCHIVE_ID, 'sessions')
+        root: !!js process.env.YIXU_COMPANION_SESSION_ROOT
     - {id: storage, name: '@deepseek-ai/dsh-storage'}
     - id: storage-json
       name: '@deepseek-ai/dsh-storage-json'
@@ -63,7 +63,7 @@
       name: '@yixu/dsh-companion-host'
       config:
         dataRoot: !!js process.env.YIXU_COMPANION_DATA_ROOT
-        nativeHome: !!js process.env.DSH_HOME
+        nativeHome: !!js process.env.YIXU_COMPANION_NATIVE_HOME
         archiveId: !!js process.env.YIXU_COMPANION_ARCHIVE_ID
         domainModule: !!js process.env.YIXU_COMPANION_DOMAIN_MODULE
         port: !!js Number(process.env.YIXU_COMPANION_HOST_PORT ?? 0)

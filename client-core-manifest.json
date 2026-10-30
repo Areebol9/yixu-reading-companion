@@ -3,7 +3,7 @@
   "files": [
     {
       "path": "dsh/bundle/cordis.patch.yml",
-      "sha256": "40a5580b8e24d87cdf2a6cc0479f8bd5cf60981c198b4a8a32aa0bf5f5bcfe93"
+      "sha256": "303611b2860c1868ade03424205c77cfcd33664f35a7a10a026bdd0ed80d72d7"
     },
     {
       "path": "dsh/bundle/package.json",
@@ -27,7 +27,7 @@
     },
     {
       "path": "scripts/client-agent-control.mjs",
-      "sha256": "b724ebba681ae095aea196c06e10493983bfe40f3c40a40539cbfb925b541b57"
+      "sha256": "b04beb748cbb832d4875664e6969e7b4240a27495cd25c2f83859e924dff39fb"
     },
     {
       "path": "scripts/client-bridge.mjs",
@@ -35,7 +35,7 @@
     },
     {
       "path": "scripts/companion-host/coordinator.mjs",
-      "sha256": "3266d5ad2d3d3bcf70badd7f7093a5f89d810d1a9ea9f2c6a52e1a7eda65e04e"
+      "sha256": "3477c023ce875c7b149165d6870bab83a4c929d140802d79b9e1375f36a8bd09"
     },
     {
       "path": "scripts/companion-host/registry.mjs",
@@ -43,7 +43,7 @@
     },
     {
       "path": "scripts/companion-host/start.mjs",
-      "sha256": "0a7650b1a7d4e9d6e9fce8a106aa59d7d3786d17d55c775ac53dcfb9c2edd5f8"
+      "sha256": "a29bdc10cfc375cfe5ba4672bc4c7a18a7b40271051bd672912c60cf88bc561d"
     },
     {
       "path": "scripts/companion-host/stop.mjs",
@@ -347,7 +347,7 @@
     },
     {
       "path": "src/core/engine.ts",
-      "sha256": "a95174beabec3f8ef8e4f70abc85e3fa7230a27a95bc78e2df0ed34b359b4306"
+      "sha256": "5daeb38b9f37302e4a19e75fa1f36aa1741dc70b4b90c8b307963be48a3be9e5"
     },
     {
       "path": "src/core/errors.ts",
@@ -419,7 +419,7 @@
     },
     {
       "path": "src/core/memory-identity.ts",
-      "sha256": "eaaeac32e12175cd4db7a5f3a7d0db673cea20d98f2c16c7a57a7a05dd985c51"
+      "sha256": "c4a41f72d14be52d7baab7c5b08d6d93a362d59269b12c19063631377793f489"
     },
     {
       "path": "src/core/memory-plan.ts",
@@ -559,7 +559,7 @@
     },
     {
       "path": "src/core/reading-output.ts",
-      "sha256": "e508a0d6d3a50e6b1947cee916c90554b1d512e38fa21b6af79f10f946b3fdce"
+      "sha256": "fffcc0c859cccdeca0d046515f9c2abf07140ce7eb59dc25169ee3370d3f0e1a"
     },
     {
       "path": "src/core/reading-policy.ts",
@@ -731,19 +731,19 @@
     },
     {
       "path": "src/host/contract.ts",
-      "sha256": "522ad1c966a8cbad99fd44de58b0160bc4a083a64bc2ce9f14de406b7a88736e"
+      "sha256": "a3031ba802fee8d737e2aa2872bf4395d1c47d9bde355fa996393ed0f4424f56"
     },
     {
       "path": "src/host/domain-computation-worker.ts",
-      "sha256": "5fb6c8e1ee630e457e99373f3bce11a207b1aa99d6eef833c5279c81a5cc6251"
+      "sha256": "50941a50fdb0046ed25c7daaa7dae036a5b71e9e038c03e139d95201e57862a0"
     },
     {
       "path": "src/host/domain-computation.ts",
-      "sha256": "ea25cfc69f10bf559db62facf5a729a9165bd4b9da4cfcde8bd8560bce65fa65"
+      "sha256": "711f778ead03f78aca5a8b5c678972ac3ea29bc9e501e90d60dcff026728c7b9"
     },
     {
       "path": "src/host/domain.ts",
-      "sha256": "90886f74caa4fc438ae9f8d25168a65d313490cb0ec901fd0043ea79495aa128"
+      "sha256": "d57771e5781d4d43e6a662710074df42f340197dd0da36270d3f7e970072613d"
     },
     {
       "path": "src/host/downloads.ts",
@@ -767,7 +767,7 @@
     },
     {
       "path": "src/host/native-home.ts",
-      "sha256": "b8e40c6d7d9a72577598077ec9809e37d48e38ce84b986b6b062b73c66bbeea0"
+      "sha256": "17919c953a84e5681a77c7769ed23113a2a72ad6bf9002d20eff44f6ee9a2d7f"
     },
     {
       "path": "src/host/node-store.ts",
@@ -787,7 +787,7 @@
     },
     {
       "path": "src/host/project-registry.ts",
-      "sha256": "6c10bbcc31f604ab2f93f4108efc6dc2bbec4316fd9a3f8e0ed697a78b81d4f5"
+      "sha256": "de8ad9a5bc53a6d69eb9ae51dafb2c3bb9a97b5909329dec72ce5cbb225f0453"
     },
     {
       "path": "src/host/projection-delta.ts",
@@ -802,8 +802,16 @@
       "sha256": "f1c6a36e24e3abfe077d7c38176be13a304330906f56697381870af29f56e017"
     },
     {
+      "path": "src/host/reading-project.ts",
+      "sha256": "a129be72f7560bcb2f1e5d7bb3a341fb96dc8ffdb2717bbfb5e399f339d3d649"
+    },
+    {
       "path": "src/host/session-repository.ts",
       "sha256": "9327ae43c74ca93a5042830742170b00ba117d0510ab45973c89585514d3b0fc"
+    },
+    {
+      "path": "src/host/shared-book-project.ts",
+      "sha256": "407ec63d7ce56e788ff51b10a2c56a4f560b70c62d89c01891ded1b2da9b15a7"
     },
     {
       "path": "src/host/status-projection.ts",
@@ -859,7 +867,7 @@
     },
     {
       "path": "src/workbench/BookDetailsPanel.tsx",
-      "sha256": "2e74702265b71b5be32213b48faa88087901e889bce7ba5072ad58435a041e14"
+      "sha256": "d572d4aa3e5cbba212fb0e00ddf84da41729f83da46c41f8f0d69a243c744320"
     },
     {
       "path": "src/workbench/BookDirectory.tsx",
@@ -875,7 +883,7 @@
     },
     {
       "path": "src/workbench/contract.ts",
-      "sha256": "faa9e06a3312b44c3aa65c4171dd2f719ea116f1b19f3f5022d67aec977ec948"
+      "sha256": "52e8657a0d73b83cf42ca0f3b6ebb16ae1080fd72997d4dff3becd3ef566095d"
     },
     {
       "path": "src/workbench/copy.ts",
@@ -883,7 +891,7 @@
     },
     {
       "path": "src/workbench/desktop-window.ts",
-      "sha256": "d30f78e7aca098ffef3c90f44d5a0dfb47d0c8a25380346326122351032cdacb"
+      "sha256": "6da64a016347a2156518fd6631e7d4fbf403fdc0a56ced8e0c3138643094729c"
     },
     {
       "path": "src/workbench/draft-versions.ts",
@@ -903,7 +911,7 @@
     },
     {
       "path": "src/workbench/environment.ts",
-      "sha256": "a938377e4ab6662fa50a330957a26c87af13dedda18524e21987a51c7b045d2c"
+      "sha256": "a6b45be4d759cf5f2b836c39e2b09952dee887f27ec030d496409f59033cf136"
     },
     {
       "path": "src/workbench/events.ts",
@@ -911,11 +919,11 @@
     },
     {
       "path": "src/workbench/i18n-process.en.ts",
-      "sha256": "70a9545d8b90918135bb40fe132b6cc50c52d194a3ba7ff523d8c40b59c11bf4"
+      "sha256": "9d613faaa7c7d8028c9da1dad07a322054a21e697272617e6b9c7936ffd5d30a"
     },
     {
       "path": "src/workbench/i18n-ui.en.ts",
-      "sha256": "10d7315d890a2a9ea1891d857a1bb9b8675484f0de0b4fc6e9c42b7761657364"
+      "sha256": "1cfc7ce29c1f80d2043ad5e0d2952ef74f3c5413f4bf7833f36b1a59bea0c0d6"
     },
     {
       "path": "src/workbench/i18n.ts",
@@ -1023,7 +1031,7 @@
     },
     {
       "path": "src/workbench/runtime.ts",
-      "sha256": "021b0063221fa98863618de906291b454e4d6f490c4bd50724e036dfc47ce896"
+      "sha256": "38c71365aa9f60a4ef49bcc63d8fae153cb6e0a6fbc346d871b2c46dc5564248"
     },
     {
       "path": "src/workbench/SettingsPanel.tsx",
@@ -1067,7 +1075,7 @@
     },
     {
       "path": "src/workbench/Workbench.tsx",
-      "sha256": "0ecda6e46668ad9155a07fe61900e20d09e248a61fcd5ace2e0ba8d9c1bcd936"
+      "sha256": "becc26252e6af276da1d486ae28a6449617d910b30e58b06ca3ed77fff648eb4"
     },
     {
       "path": "workbench.html",
